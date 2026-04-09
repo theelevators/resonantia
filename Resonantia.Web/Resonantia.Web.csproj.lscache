@@ -67,7 +67,7 @@ obj/Debug/net10.0/
 Program.cs
 
 [metadataReferences]
-../../../../usr/share/dotnet/packs/Microsoft.NETCore.App.Ref/10.0.3/ref/net10.0/
+../../../../usr/share/dotnet/packs/Microsoft.NETCore.App.Ref/10.0.4/ref/net10.0/
  Microsoft.CSharp.dll
  Microsoft.VisualBasic.Core.dll
  Microsoft.VisualBasic.dll
@@ -243,7 +243,7 @@ Program.cs
  microsoft.aspnetcore.components.webassembly/10.0.3/lib/net10.0/Microsoft.AspNetCore.Components.WebAssembly.dll
  microsoft.aspnetcore.components/10.0.3/lib/net10.0/Microsoft.AspNetCore.Components.dll
  microsoft.aspnetcore.metadata/10.0.3/lib/net10.0/Microsoft.AspNetCore.Metadata.dll
- microsoft.dotnet.hotreload.webassembly.browser/10.0.103/lib/net10.0/Microsoft.DotNet.HotReload.WebAssembly.Browser.dll
+ microsoft.dotnet.hotreload.webassembly.browser/10.0.104/lib/net10.0/Microsoft.DotNet.HotReload.WebAssembly.Browser.dll
  microsoft.extensions.configuration.abstractions/10.0.3/lib/net10.0/Microsoft.Extensions.Configuration.Abstractions.dll
  microsoft.extensions.configuration.binder/10.0.3/lib/net10.0/Microsoft.Extensions.Configuration.Binder.dll
  microsoft.extensions.configuration.fileextensions/10.0.3/lib/net10.0/Microsoft.Extensions.Configuration.FileExtensions.dll
@@ -267,18 +267,18 @@ Program.cs
  microsoft.jsinterop/10.0.3/lib/net10.0/Microsoft.JSInterop.dll
 
 [analyzerReferences]
-../../../../usr/share/dotnet/packs/Microsoft.NETCore.App.Ref/10.0.3/analyzers/dotnet/cs/
+../../../../usr/share/dotnet/packs/Microsoft.NETCore.App.Ref/10.0.4/analyzers/dotnet/cs/
  Microsoft.Interop.ComInterfaceGenerator.dll
  Microsoft.Interop.JavaScript.JSImportGenerator.dll
  Microsoft.Interop.LibraryImportGenerator.dll
  Microsoft.Interop.SourceGeneration.dll
  System.Text.Json.SourceGeneration.dll
  System.Text.RegularExpressions.Generator.dll
-../../../../usr/share/dotnet/sdk/10.0.103/Sdks/Microsoft.NET.Sdk.Razor/source-generators/
+../../../../usr/share/dotnet/sdk/10.0.104/Sdks/Microsoft.NET.Sdk.Razor/source-generators/
  Microsoft.AspNetCore.Razor.Utilities.Shared.dll
  Microsoft.CodeAnalysis.Razor.Compiler.dll
  Microsoft.Extensions.ObjectPool.dll
-../../../../usr/share/dotnet/sdk/10.0.103/Sdks/Microsoft.NET.Sdk/analyzers/
+../../../../usr/share/dotnet/sdk/10.0.104/Sdks/Microsoft.NET.Sdk/analyzers/
  Microsoft.CodeAnalysis.CSharp.NetAnalyzers.dll
  Microsoft.CodeAnalysis.NetAnalyzers.dll
 <NUGET>/
@@ -286,12 +286,12 @@ Program.cs
  microsoft.extensions.logging.abstractions/10.0.3/analyzers/dotnet/roslyn4.4/cs/Microsoft.Extensions.Logging.Generators.dll
  microsoft.extensions.options/10.0.3/analyzers/dotnet/roslyn4.4/cs/Microsoft.Extensions.Options.SourceGeneration.dll
  microsoft.extensions.validation/10.0.3/analyzers/dotnet/cs/Microsoft.Extensions.Validation.ValidationsGenerator.dll
- microsoft.net.illink.tasks/10.0.3/analyzers/dotnet/cs/
+ microsoft.net.illink.tasks/10.0.4/analyzers/dotnet/cs/
   ILLink.CodeFixProvider.dll
   ILLink.RoslynAnalyzer.dll
 
 [analyzerConfigFiles]
-../../../../usr/share/dotnet/sdk/10.0.103/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig
+../../../../usr/share/dotnet/sdk/10.0.104/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig
 obj/Debug/net10.0/Resonantia.Web.GeneratedMSBuildEditorConfig.editorconfig
 
 [additionalFiles]
