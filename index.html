@@ -229,6 +229,68 @@
       text-shadow: 0 2px 14px rgba(0,0,0,0.55);
     }
 
+    /* ── DEMO ── */
+    .demo {
+      padding: 120px 24px;
+      max-width: 980px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .demo-label {
+      font-size: 9px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 20px;
+    }
+
+    .demo-title {
+      font-family: var(--font-display);
+      font-weight: 300;
+      font-style: italic;
+      font-size: clamp(26px, 4vw, 44px);
+      line-height: 1.18;
+      color: rgba(255,255,255,0.84);
+      margin-bottom: 18px;
+      text-shadow: 0 8px 28px rgba(0,0,0,0.4);
+    }
+
+    .demo-copy {
+      max-width: 620px;
+      margin: 0 auto 30px;
+      font-size: 13px;
+      line-height: 1.8;
+      color: rgba(255,255,255,0.46);
+      text-shadow: 0 2px 14px rgba(0,0,0,0.55);
+    }
+
+    .demo-frame {
+      position: relative;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 0.5px solid rgba(255,255,255,0.1);
+      background:
+        radial-gradient(circle at top left, rgba(91,155,213,0.08), transparent 38%),
+        linear-gradient(180deg, rgba(13,15,19,0.98), rgba(9,10,14,0.98));
+      box-shadow: 0 28px 60px rgba(0,0,0,0.28);
+    }
+
+    .demo-video {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #07080b;
+    }
+
+    .demo-note {
+      margin-top: 14px;
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.28);
+    }
+
     /* ── THREE TRUTHS ── */
     .truths {
       padding: 140px 24px;
@@ -868,6 +930,7 @@
         padding: 84px 24px 72px;
       }
 
+      .demo,
       .truths,
       .flow,
       .protocol,
@@ -875,6 +938,14 @@
       .footer-cta {
         padding-top: 88px;
         padding-bottom: 88px;
+      }
+
+      .demo-title {
+        margin-bottom: 14px;
+      }
+
+      .demo-copy {
+        margin-bottom: 22px;
       }
 
       .footer-cta {
@@ -909,6 +980,7 @@
 
       .hero-body,
       .orb-sub,
+      .demo-copy,
       .truth-text,
       .flow-intro,
       .flow-desc,
@@ -926,6 +998,7 @@
       .nav-brand,
       .hero-eyebrow,
       .scroll-hint,
+      .demo-label,
       .truths-label,
       .flow-label,
       .flow-stage-label,
@@ -938,6 +1011,7 @@
       }
 
       .hero-tagline,
+      .demo-title,
       .orb-caption,
       .flow-intro,
       .protocol-intro,
@@ -949,6 +1023,7 @@
 
       .hero-body,
       .orb-sub,
+      .demo-copy,
       .truth-text,
       .flow-desc,
       .flow-law,
@@ -960,6 +1035,7 @@
       }
 
       .flow-pill,
+      .demo-note,
       .protocol-node .node-title,
       .avec-labels span,
       .access-label {
@@ -973,6 +1049,7 @@
       }
 
       .protocol-node,
+      .demo-frame,
       .flow-canvas,
       .access-panel {
         border-color: rgba(255,255,255,0.12);
@@ -1033,6 +1110,7 @@
 </section>
 
 <div class="divider"></div>
+
 
 <!-- ORB -->
 <section class="orb-section">
@@ -1168,6 +1246,20 @@
 
 <div class="divider"></div>
 
+<!-- DEMO -->
+<section class="demo">
+  <p class="demo-label">See the terrain</p>
+  <h2 class="demo-title">Watch the descent happen.</h2>
+  <div class="demo-frame">
+    <video class="demo-video" controls playsinline preload="metadata">
+      <source src="resonantia-demo.mp4" type="video/mp4" />
+      Your browser does not support the demo video.
+    </video>
+  </div>
+  <p class="demo-note">demo capture from the desktop app</p>
+</section>
+
+<div class="divider"></div>
 <!-- THREE TRUTHS -->
 <section class="truths">
   <p class="truths-label">The terrain</p>
