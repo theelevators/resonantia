@@ -1070,7 +1070,7 @@
     const driftLift = Math.sin(t * 0.48 + psiVal) * 7;
     const driftSway = Math.cos(t * 0.26 + psiVal * 0.7) * 4.5;
     const orbX = sc.x + driftSway;
-    const orbY = sc.y - 6 + driftLift;
+    const orbY = sc.y - 34 + driftLift;
     const baseRadius = 78;
     const scale = baseRadius * (1 + Math.sin(t * pulseRate) * pulseAmt);
     const rot = {
@@ -1877,7 +1877,7 @@
         <span class="slider-val" style="color:{AVEC_HEX.stability}">{calibStability.toFixed(2)}</span>
       </div>
       <div class="slider-row">
-        <span class="slider-label" style="color:{AVEC_HEX.friction}">drive</span>
+        <span class="slider-label" style="color:{AVEC_HEX.friction}">wear</span>
         <input type="range" min="0" max="1" step="0.01" bind:value={calibFriction} class="avec-slider" style="accent-color: {AVEC_HEX.friction};" />
         <span class="slider-val" style="color:{AVEC_HEX.friction}">{calibFriction.toFixed(2)}</span>
       </div>

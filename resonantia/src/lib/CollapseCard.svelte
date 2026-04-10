@@ -17,10 +17,6 @@
 
   $: avec = data?.nodeDto?.userAvec ?? null;
 
-  $: rho   = data?.nodeDto?.rho   ?? null;
-  $: kappa = data?.nodeDto?.kappa ?? null;
-  $: psi   = data?.nodeDto?.userAvec.psi ?? data?.node.psi ?? null;
-
   $: sessionLabel = data?.node.sessionId.replace(/_/g, ' ') ?? '—';
   $: timestamp    = data?.node.timestamp ? formatTimestamp(data.node.timestamp) : '—';
   $: tier         = data?.node.tier ?? '—';
@@ -28,16 +24,16 @@
   $: if (summary) summaryOpen = true;
   $: shellStyle = [
     'position:fixed',
-    'bottom:24px',
+    'bottom:18px',
     'left:50%',
     `transform:translateX(-50%) translateY(${visible ? '0' : 'calc(100% + 32px)'})`,
     `opacity:${visible ? '1' : '0'}`,
-    'width:min(340px, calc(100vw - 32px))',
+    'width:min(312px, calc(100vw - 28px))',
     'max-width:calc(100vw - 32px)',
     'background:rgba(12, 14, 20, 0.96)',
     'border:0.5px solid rgba(255, 255, 255, 0.1)',
-    'border-radius:14px',
-    'padding:20px',
+    'border-radius:13px',
+    'padding:16px',
     'z-index:30',
     'box-shadow:0 18px 44px rgba(0, 0, 0, 0.34)',
     'backdrop-filter:blur(20px)',
@@ -77,46 +73,7 @@
 
   <div class="whisper-timestamp">{timestamp}</div>
 
-  {#if avec}
-    <div class="whisper-avec-grid">
-      {#each [
-        { key: 'stability' as const, val: avec.stability },
-        { key: 'friction'  as const, val: avec.friction  },
-        { key: 'logic'     as const, val: avec.logic      },
-        { key: 'autonomy'  as const, val: avec.autonomy   },
-      ] as dim}
-        <div class="whisper-dim">
-          <span class="whisper-dim-label">{dim.key}</span>
-          <div class="whisper-bar-track">
-            <div
-              class="whisper-bar-fill"
-              style="width:{bar(dim.val)};background:{AVEC_HEX[dim.key]}"
-            ></div>
-          </div>
-          <span class="whisper-dim-val">{dim.val.toFixed(2)}</span>
-        </div>
-      {/each}
-    </div>
-  {/if}
-
-  <div class="whisper-divider"></div>
-
-  <div class="whisper-metrics">
-    <div class="whisper-metric">
-      <span class="whisper-metric-label">Ψ</span>
-      <span class="whisper-metric-val">{psi != null ? psi.toFixed(4) : '—'}</span>
-    </div>
-    <div class="whisper-metric">
-      <span class="whisper-metric-label">ρ signal</span>
-      <span class="whisper-metric-val">{rho != null ? rho.toFixed(2) : '—'}</span>
-    </div>
-    <div class="whisper-metric">
-      <span class="whisper-metric-label">κ coherence</span>
-      <span class="whisper-metric-val">{kappa != null ? kappa.toFixed(2) : '—'}</span>
-    </div>
-  </div>
-
-  <div class="whisper-actions">
+  <div class="whisper-actions whisper-actions-top">
     <button
       class="whisper-transmute-btn"
       on:click={handleTransmute}
@@ -168,12 +125,8 @@
     {/if}
   </div>
 
-  {#if transmuteError}
-    <p class="whisper-transmute-error">{transmuteError}</p>
-  {/if}
-
   {#if data?.relatedSessions?.length}
-    <div class="whisper-threads">
+    <div class="whisper-threads whisper-threads-top">
       {#each data.relatedSessions.slice(0, 4) as s}
         <button
           class="whisper-thread-tag"
@@ -183,6 +136,32 @@
         </button>
       {/each}
     </div>
+  {/if}
+
+  {#if avec}
+    <div class="whisper-avec-grid">
+      {#each [
+        { key: 'stability' as const, label: 'grounding', val: avec.stability },
+        { key: 'friction'  as const, label: 'wear', val: avec.friction  },
+        { key: 'logic'     as const, label: 'clarity', val: avec.logic      },
+        { key: 'autonomy'  as const, label: 'self-trust', val: avec.autonomy   },
+      ] as dim}
+        <div class="whisper-dim">
+          <span class="whisper-dim-label">{dim.label}</span>
+          <div class="whisper-bar-track">
+            <div
+              class="whisper-bar-fill"
+              style="width:{bar(dim.val)};background:{AVEC_HEX[dim.key]}"
+            ></div>
+          </div>
+          <span class="whisper-dim-val">{dim.val.toFixed(2)}</span>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
+  {#if transmuteError}
+    <p class="whisper-transmute-error">{transmuteError}</p>
   {/if}
 </div>
 
@@ -202,7 +181,7 @@
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
   }
 
   .whisper-left {
@@ -215,7 +194,7 @@
     font-family: 'Fraunces', Georgia, serif;
     font-weight: 300;
     font-style: italic;
-    font-size: 14px;
+    font-size: 13px;
     color: rgba(255, 255, 255, 0.75);
     line-height: 1.3;
     max-width: 220px;
@@ -249,14 +228,14 @@
     font-size: 10px;
     color: rgba(255, 255, 255, 0.25);
     letter-spacing: 0.06em;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
   }
 
   .whisper-avec-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    margin-bottom: 16px;
+    gap: 8px;
+    margin-top: 12px;
   }
 
   .whisper-dim {
@@ -290,42 +269,16 @@
     color: rgba(255, 255, 255, 0.5);
   }
 
-  .whisper-divider {
-    height: 0.5px;
-    background: rgba(255, 255, 255, 0.06);
-    margin: 4px 0 14px;
-  }
-
-  .whisper-metrics {
-    display: flex;
-    gap: 20px;
-  }
-
-  .whisper-metric {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .whisper-metric-label {
-    font-size: 9px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.25);
-  }
-
-  .whisper-metric-val {
-    font-size: 17px;
-    color: rgba(255, 255, 255, 0.8);
-    letter-spacing: 0.02em;
-  }
-
   .whisper-actions {
-    margin-top: 14px;
+    margin-top: 12px;
     position: relative;
     display: inline-flex;
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .whisper-actions-top {
+    margin-top: 0;
   }
 
   .whisper-transmute-btn {
@@ -443,10 +396,15 @@
   }
 
   .whisper-threads {
-    margin-top: 14px;
+    margin-top: 12px;
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
+  }
+
+  .whisper-threads-top {
+    margin-top: 10px;
+    margin-bottom: 2px;
   }
 
   .whisper-thread-tag {
@@ -468,17 +426,9 @@
 
   @media (max-width: 640px) {
     .whisper-card {
-      bottom: 16px;
-      padding: 16px;
+      bottom: 14px;
+      padding: 14px;
       border-radius: 12px;
-    }
-
-    .whisper-metrics {
-      gap: 14px;
-    }
-
-    .whisper-metric-val {
-      font-size: 15px;
     }
 
     .alchemy-card {
