@@ -64,6 +64,14 @@ export interface StoreContextResponse {
   validationError: string | null;
 }
 
+export interface AiSummary {
+  topic: string;
+  whatHappened: string;
+  whereWeLeftOff: string;
+  vibe: string;
+  pickBackUpWith: string;
+}
+
 export interface CalibrateSessionResponse {
   previousAvec: AvecState;
   delta: number;

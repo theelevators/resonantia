@@ -248,6 +248,19 @@ fn with_query(base_url: &str, path: &str, limit: i32, session_id: Option<String>
     Ok(url.to_string())
 }
 
+fn join_url(base_url: &str, path: &str) -> Result<String, String> {
+    let normalized_base = if base_url.ends_with('/') {
+        base_url.to_string()
+    } else {
+        format!("{base_url}/")
+    };
+
+    Url::parse(&normalized_base)
+        .and_then(|base| base.join(path.trim_start_matches('/')))
+        .map(|url| url.to_string())
+        .map_err(|err| map_err("failed to build request url", err))
+}
+
 fn map_err(prefix: &str, err: impl std::fmt::Display) -> String {
     format!("{prefix}: {err}")
 }
@@ -401,34 +414,93 @@ fn load_persisted_config(state: &AppState) -> Result<(), String> {
 
 fn parse_ai_response(text: &str) -> Option<AiSummary> {
     let thinking_re = Regex::new(r"(?is)Thinking\.\.\..*?\.\.\.done thinking\.").ok()?;
-    let cleaned = thinking_re.replace(text, "").trim().to_string();
+    let mut cleaned = thinking_re.replace(text, "").replace("\r\n", "\n").trim().to_string();
 
-    let headings = r"Topic|What happened|Where we left off|Vibe|Pick back up with";
-
-    let extract = |label: &str| {
-        let pattern = format!(
-            r"(?is)(?:^|\n){}:\s*(.+?)(?=\n(?:{}):|$)",
-            regex::escape(label),
-            headings
-        );
-        let re = match Regex::new(&pattern) {
+    for label in [
+        "Topic",
+        "What happened",
+        "Where we left off",
+        "Vibe",
+        "Pick back up with",
+    ] {
+        let markdown_pattern = format!(r"(?im)^\s*(?:[-*]\s*)?\*\*?{}\*\*?\s*:", regex::escape(label));
+        let markdown_re = match Regex::new(&markdown_pattern) {
             Ok(value) => value,
-            Err(_) => return String::new(),
+            Err(_) => continue,
         };
-        re.captures(&cleaned)
-            .and_then(|caps| caps.get(1))
-            .map(|m| m.as_str().trim().to_string())
-            .unwrap_or_default()
+        cleaned = markdown_re
+            .replace_all(&cleaned, format!("{label}:"))
+            .to_string();
+    }
+
+    let labels = [
+        "Topic",
+        "What happened",
+        "Where we left off",
+        "Vibe",
+        "Pick back up with",
+    ];
+
+    let lower = cleaned.to_lowercase();
+    let mut positions: Vec<(usize, &'static str)> = labels
+        .iter()
+        .filter_map(|label| {
+            let needle = format!("{}:", label.to_lowercase());
+            lower.find(&needle).map(|index| (index, *label))
+        })
+        .collect();
+
+    positions.sort_by_key(|(index, _)| *index);
+
+    let extract_section = |label: &str| -> String {
+        let Some((start, _)) = positions.iter().find(|(_, current)| *current == label) else {
+            return String::new();
+        };
+
+        let header_len = label.len() + 1;
+        let content_start = start + header_len;
+        let content_end = positions
+            .iter()
+            .filter(|(index, _)| *index > *start)
+            .map(|(index, _)| *index)
+            .min()
+            .unwrap_or(cleaned.len());
+
+        cleaned[content_start..content_end]
+            .trim()
+            .trim_matches('*')
+            .trim()
+            .to_string()
     };
 
-    let topic = extract("Topic");
-    let what_happened = extract("What happened");
-    let where_we_left_off = extract("Where we left off");
-    let vibe = extract("Vibe");
-    let pick_back_up_with = extract("Pick back up with");
+    let topic = extract_section("Topic");
+    let what_happened = extract_section("What happened");
+    let where_we_left_off = extract_section("Where we left off");
+    let vibe = extract_section("Vibe");
+    let pick_back_up_with = extract_section("Pick back up with");
 
     if topic.trim().is_empty() && what_happened.trim().is_empty() {
-        return None;
+        let fallback = cleaned.trim();
+        if fallback.is_empty() {
+            return None;
+        }
+
+        let fallback_topic = fallback
+            .lines()
+            .next()
+            .unwrap_or("transmutation")
+            .trim()
+            .trim_matches('*')
+            .trim_end_matches(':')
+            .to_string();
+
+        return Some(AiSummary {
+            topic: if fallback_topic.is_empty() { "transmutation".to_string() } else { fallback_topic },
+            what_happened: fallback.to_string(),
+            where_we_left_off: String::new(),
+            vibe: String::new(),
+            pick_back_up_with: String::new(),
+        });
     }
 
     Some(AiSummary {
@@ -776,7 +848,7 @@ async fn summarize_node(
         .map_err(|err| map_err("failed to read ollama model", err))?
         .clone();
 
-    let url = format!("{ollama_base_url}/api/chat");
+    let url = join_url(&ollama_base_url, "/api/chat")?;
     let payload = OllamaChatRequest {
         model,
         messages: vec![OllamaMessage {
@@ -786,25 +858,63 @@ async fn summarize_node(
         stream: false,
     };
 
+    eprintln!(
+        "AI summary requested · model={} url={} nodeLength={}",
+        payload.model,
+        url,
+        payload.messages.first().map(|message| message.content.len()).unwrap_or(0)
+    );
+
     let response = state
         .http
         .post(url)
         .json(&payload)
         .send()
         .await
-        .map_err(|err| map_err("ollama request failed", err))?
-        .error_for_status()
-        .map_err(|err| map_err("ollama response status failed", err))?
+        .map_err(|err| {
+            eprintln!("AI summary HTTP request failed · model={} error={}", payload.model, err);
+            map_err("ollama request failed", err)
+        })?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        eprintln!(
+            "AI summary non-success response · model={} status={} body={}",
+            payload.model,
+            status,
+            body
+        );
+        return Err(format!("ollama response status failed: {} {}", status, body));
+    }
+
+    let response = response
         .json::<OllamaChatResponse>()
         .await
-        .map_err(|err| map_err("ollama response parse failed", err))?;
+        .map_err(|err| {
+            eprintln!("AI summary response parse failed · model={} error={}", payload.model, err);
+            map_err("ollama response parse failed", err)
+        })?;
 
     let text = match response.message {
         Some(message) => message.content,
-        None => return Ok(None),
+        None => {
+            eprintln!("AI summary returned no message content · model={}", payload.model);
+            return Ok(None);
+        }
     };
 
-    Ok(parse_ai_response(&text))
+    eprintln!(
+        "AI summary raw response received · model={} responseLength={}",
+        payload.model,
+        text.len()
+    );
+
+    let parsed = parse_ai_response(&text);
+    if parsed.is_none() {
+        eprintln!("AI summary parse returned no recognizable sections · model={}", payload.model);
+    }
+    Ok(parsed)
 }
 
 #[tauri::command]

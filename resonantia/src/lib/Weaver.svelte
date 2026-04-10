@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { avecColor, avecToRgb, shortLabel, AVEC_HEX, formatTimestamp } from './avec';
+  import { avecColor, avecToRgb, shortLabel, AVEC_HEX, AVEC_COLORS, formatTimestamp } from './avec';
   import CollapseCard from './CollapseCard.svelte';
   import type {
+    AiSummary,
     GraphResponse,
     GraphSessionDto,
     GraphNodeDto,
@@ -53,6 +54,11 @@
   let selectedNode:    GraphNodeDto    | null = null;
   let cardData:    CollapseCardData | null = null;
   let cardVisible  = false;
+  let transmuting = false;
+  let transmuteError: string | null = null;
+  let transmutationCache: Record<string, AiSummary> = {};
+
+  $: currentTransmutation = cardData ? transmutationCache[cardData.node.syntheticId] ?? null : null;
 
   function matchesSelectedNode(graphNode: GraphNodeDto, dto: NodeDto) {
     return dto.syntheticId === graphNode.syntheticId;
@@ -71,6 +77,88 @@
     s:     0.3 + Math.random() * 0.9,
     phase: Math.random() * Math.PI * 2,
   }));
+
+  type CollapseStream = {
+    side: number;
+    offset: number;
+    col: { r: number; g: number; b: number };
+    destCol: { r: number; g: number; b: number };
+    thickness: number;
+    phase: number;
+    speed: number;
+  };
+
+  const COLLAPSE_ICO_VERTS = (() => {
+    const phi = (1 + Math.sqrt(5)) / 2;
+    const raw = [
+      [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
+      [0, -1, phi], [0, 1, phi], [0, -1, -phi], [0, 1, -phi],
+      [phi, 0, -1], [phi, 0, 1], [-phi, 0, -1], [-phi, 0, 1],
+    ];
+    return raw.map(([x, y, z]) => {
+      const n = Math.sqrt(x * x + y * y + z * z);
+      return [x / n, y / n, z / n] as [number, number, number];
+    });
+  })();
+
+  const COLLAPSE_ICO_FACES = [
+    [0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],
+    [1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+    [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],
+    [4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1],
+  ];
+
+  function buildCollapseStreams(avec: { stability: number; friction: number; logic: number; autonomy: number }): CollapseStream[] {
+    const ordered = Object.entries({
+      stability: avec.stability,
+      friction: avec.friction,
+      logic: avec.logic,
+      autonomy: avec.autonomy,
+    }).sort((a, b) => b[1] - a[1]) as [keyof typeof AVEC_COLORS, number][];
+
+    const streams: CollapseStream[] = [];
+    for (let i = 0; i < 4; i++) {
+      const side = i % 2 === 0 ? -1 : 1;
+      const dim = ordered[Math.min(i, ordered.length - 1)][0];
+      const nextDim = ordered[Math.min(i + 1, ordered.length - 1)][0];
+      const weight = ordered[Math.min(i, ordered.length - 1)][1];
+      const count = Math.round(weight * 3) + 1;
+      for (let j = 0; j < count; j++) {
+        streams.push({
+          side,
+          offset: (j - (count - 1) / 2) * 7,
+          col: AVEC_COLORS[dim],
+          destCol: AVEC_COLORS[nextDim],
+          thickness: 0.65 + weight * 1.7 * (0.6 + hashUnit(`${dim}-${j}`) * 0.4),
+          phase: hashUnit(`${dim}-${j}-phase`) * Math.PI * 2,
+          speed: 0.35 + hashUnit(`${dim}-${j}-speed`) * 0.28,
+        });
+      }
+    }
+    return streams;
+  }
+
+  function projectCollapseOrb(v: [number, number, number], rx: number, ry: number, rz: number, scale: number, cx: number, cy: number) {
+    let [x, y, z] = v;
+    const ry1 = y * Math.cos(rx) - z * Math.sin(rx);
+    const rz1 = y * Math.sin(rx) + z * Math.cos(rx);
+    const rx2 = x * Math.cos(ry) + rz1 * Math.sin(ry);
+    const rz2 = -x * Math.sin(ry) + rz1 * Math.cos(ry);
+    const rx3 = rx2 * Math.cos(rz) - ry1 * Math.sin(rz);
+    const ry3 = rx2 * Math.sin(rz) + ry1 * Math.cos(rz);
+    const dist = 3;
+    const fov = dist / (dist + rz2);
+    return { x: cx + rx3 * scale * fov, y: cy + ry3 * scale * fov, z: rz2 };
+  }
+
+  function getCollapseOrbFaceColor(faceIdx: number, avec: { stability: number; friction: number; logic: number; autonomy: number }, brightness: number): string {
+    const dims = [avec.stability, avec.friction, avec.logic, avec.autonomy];
+    const cols = [AVEC_COLORS.stability, AVEC_COLORS.friction, AVEC_COLORS.logic, AVEC_COLORS.autonomy];
+    const dimIndex = faceIdx % 4;
+    const col = cols[dimIndex];
+    const alpha = Math.min(brightness * dims[dimIndex] * 0.74 + brightness * 0.28, 0.92);
+    return `rgba(${col.r},${col.g},${col.b},${alpha})`;
+  }
 
   // ── Coordinate helpers ──────────────────────────────────────────
   function toScreen(wx: number, wy: number): Vec2 {
@@ -231,6 +319,8 @@
     closeTransientUi();
     selectedNode = n;
     level        = 2;
+    transmuteError = null;
+    transmuting = false;
     const np = nodePos[n.id];
     if (np) { targetCamX = np.x; targetCamY = np.y; targetCamScale = COLLAPSE_SCALE; }
 
@@ -272,7 +362,38 @@
 
   function closeCard() {
     cardVisible = false;
+    transmuting = false;
+    transmuteError = null;
     setTimeout(() => { if (!cardVisible) cardData = null; }, 500);
+  }
+
+  async function transmuteCurrentNode() {
+    if (!cardData?.nodeDto?.raw || !cardData?.node?.syntheticId || transmuting) return;
+
+    const syntheticId = cardData.node.syntheticId;
+    if (transmutationCache[syntheticId]) return;
+
+    transmuting = true;
+    transmuteError = null;
+    try {
+      const summary = await invoke<AiSummary | null>('summarize_node', {
+        rawNode: cardData.nodeDto.raw,
+      });
+
+      if (!summary) {
+        transmuteError = 'The model answered, but the transmutation did not resolve into a readable form.';
+        return;
+      }
+
+      transmutationCache = {
+        ...transmutationCache,
+        [syntheticId]: summary,
+      };
+    } catch (err) {
+      transmuteError = String(err);
+    } finally {
+      transmuting = false;
+    }
   }
 
   function closeTransientUi() {
@@ -525,88 +646,148 @@
     };
     const { r, g, b } = avecToRgb(avec);
     const col = `${Math.round(r)},${Math.round(g)},${Math.round(b)}`;
-    const descriptor = collapseDescriptors(avec);
-    const orbX = sc.x;
-    const orbY = sc.y - 12;
-    const breathe = Math.sin(t * 1.2) * 4;
-    const shimmer = Math.sin(t * 2.4) * 0.08;
+    const psiVal = avec.stability + avec.friction + avec.logic + avec.autonomy;
+    const pulseRate = 0.3 + (1 - psiVal / 4) * 1.2;
+    const pulseAmt = 0.04 + (1 - psiVal / 4) * 0.08;
+    const driftLift = Math.sin(t * 0.48 + psiVal) * 7;
+    const driftSway = Math.cos(t * 0.26 + psiVal * 0.7) * 4.5;
+    const orbX = sc.x + driftSway;
+    const orbY = sc.y - 6 + driftLift;
+    const baseRadius = 78;
+    const scale = baseRadius * (1 + Math.sin(t * pulseRate) * pulseAmt);
+    const rot = {
+      x: t * 0.15 + Math.sin(t * 0.22) * 0.08,
+      y: t * 0.2 + Math.cos(t * 0.17) * 0.09,
+      z: t * 0.06 + Math.sin(t * 0.13 + psiVal) * 0.04,
+    };
+    const glowRadius = scale * 1.42;
+    const streams = buildCollapseStreams(avec);
+    const shellTilt = Math.sin(t * 0.19 + psiVal) * 0.08;
 
-    ctx.beginPath();
-    ctx.ellipse(orbX, orbY + 14, 118, 92, 0, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(122,170,122,0.06)';
-    ctx.lineWidth = 0.6;
-    ctx.setLineDash([3, 7]);
-    ctx.stroke();
+    ctx.save();
 
+    ctx.save();
+    ctx.translate(orbX, orbY + 16);
+    ctx.rotate(shellTilt);
     ctx.beginPath();
-    ctx.ellipse(orbX, orbY + 10, 84, 66, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, 112, 84, 0, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(255,255,255,0.035)';
-    ctx.lineWidth = 18;
+    ctx.lineWidth = 0.8;
+    ctx.setLineDash([4, 8]);
+    ctx.stroke();
     ctx.setLineDash([]);
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(orbX, orbY + 8);
+    ctx.rotate(-shellTilt * 1.6);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 86, 62, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(${col},0.07)`;
+    ctx.lineWidth = 0.7;
     ctx.stroke();
+    ctx.restore();
 
+    streams.forEach(stream => {
+      const startX = stream.side < 0 ? orbX - 178 : orbX + 178;
+      const endX = stream.side < 0 ? orbX - scale * 0.92 : orbX + scale * 0.92;
+      const baseY = orbY + stream.offset + Math.sin(t * 0.42 + stream.phase) * 1.8;
+      const midX = (startX + endX) / 2;
+      const wave = Math.sin(t * stream.speed + stream.phase) * (11 + Math.abs(stream.offset) * 0.36);
+      const cp1x = midX;
+      const cp1y = baseY + wave;
+      const cp2x = endX + (stream.side < 0 ? 18 : -18);
+      const cp2y = baseY - wave * 0.55;
+      const grad = ctx.createLinearGradient(startX, baseY, endX, baseY);
+
+      if (stream.side < 0) {
+        grad.addColorStop(0, `rgba(${stream.col.r},${stream.col.g},${stream.col.b},0)`);
+        grad.addColorStop(0.42, `rgba(${stream.col.r},${stream.col.g},${stream.col.b},0.26)`);
+        grad.addColorStop(0.86, `rgba(${stream.destCol.r},${stream.destCol.g},${stream.destCol.b},0.18)`);
+        grad.addColorStop(1, `rgba(${stream.destCol.r},${stream.destCol.g},${stream.destCol.b},0)`);
+      } else {
+        grad.addColorStop(0, `rgba(${stream.col.r},${stream.col.g},${stream.col.b},0)`);
+        grad.addColorStop(0.16, `rgba(${stream.col.r},${stream.col.g},${stream.col.b},0.18)`);
+        grad.addColorStop(0.62, `rgba(${stream.destCol.r},${stream.destCol.g},${stream.destCol.b},0.28)`);
+        grad.addColorStop(1, `rgba(${stream.destCol.r},${stream.destCol.g},${stream.destCol.b},0)`);
+      }
+
+      ctx.beginPath();
+      ctx.moveTo(startX, baseY);
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, baseY + stream.offset * 0.08);
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = stream.thickness;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+    });
+
+    const halo = ctx.createRadialGradient(orbX, orbY, 0, orbX, orbY, glowRadius);
+    const haloAlpha = 0.08 + Math.sin(t * pulseRate) * 0.022;
+    halo.addColorStop(0, `rgba(${col},${haloAlpha * 2})`);
+    halo.addColorStop(0.5, `rgba(${col},${haloAlpha * 0.82})`);
+    halo.addColorStop(1, `rgba(${col},0)`);
+    ctx.fillStyle = halo;
     ctx.beginPath();
-    ctx.ellipse(orbX, orbY + 6, 50, 42, 0, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(${col},0.045)`;
+    ctx.arc(orbX, orbY, glowRadius, 0, Math.PI * 2);
     ctx.fill();
 
-    const glo = ctx.createRadialGradient(orbX, orbY, 14, orbX, orbY, 96 + breathe);
-    glo.addColorStop(0, `rgba(${col},0.2)`);
-    glo.addColorStop(1, `rgba(${col},0)`);
+    const projected = COLLAPSE_ICO_VERTS.map(v =>
+      projectCollapseOrb(v, rot.x, rot.y, rot.z, scale, orbX, orbY)
+    );
+
+    COLLAPSE_ICO_FACES
+      .map((face, index) => ({
+        face,
+        index,
+        z: (projected[face[0]].z + projected[face[1]].z + projected[face[2]].z) / 3,
+      }))
+      .sort((a, b) => a.z - b.z)
+      .forEach(({ face, index, z }) => {
+        const [a, b, c] = face.map(vertexIndex => projected[vertexIndex]);
+        const brightness = 0.18 + ((z + 1) / 2) * 0.5;
+
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.lineTo(c.x, c.y);
+        ctx.closePath();
+        ctx.fillStyle = getCollapseOrbFaceColor(index, avec, brightness);
+        ctx.fill();
+        ctx.strokeStyle = `rgba(255,255,255,${0.08 + ((z + 1) / 2) * 0.14})`;
+        ctx.lineWidth = 0.62;
+        ctx.stroke();
+      });
+
+    const coreRadius = scale * 0.22;
+    const core = ctx.createRadialGradient(orbX - coreRadius * 0.3, orbY - coreRadius * 0.3, 0, orbX, orbY, coreRadius);
+    const coreAlpha = 0.74 + Math.sin(t * pulseRate * 2) * 0.14;
+    core.addColorStop(0, `rgba(255,255,255,${coreAlpha})`);
+    core.addColorStop(0.4, `rgba(${col},${coreAlpha * 0.82})`);
+    core.addColorStop(1, `rgba(${col},0)`);
+    ctx.fillStyle = core;
     ctx.beginPath();
-    ctx.arc(orbX, orbY, 96 + breathe, 0, Math.PI * 2);
-    ctx.fillStyle = glo;
+    ctx.arc(orbX, orbY, coreRadius, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.beginPath();
-    ctx.arc(orbX, orbY, 42 + breathe * 0.5, 0, Math.PI * 2);
-    ctx.fillStyle   = `rgba(${col},0.075)`;
-    ctx.fill();
-    ctx.strokeStyle = `rgba(${col},0.22)`;
-    ctx.lineWidth   = 0.5;
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.arc(orbX, orbY, 28 + breathe * 0.3, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(${col},${0.24 + shimmer})`;
-    ctx.fill();
-
-    ctx.beginPath();
-    ctx.arc(orbX, orbY, 17, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(${col},0.82)`;
-    ctx.fill();
-
-    ctx.beginPath();
-    ctx.arc(orbX - 6, orbY - 6, 5.2, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(${Math.min(255,Math.round(r+45))},${Math.min(255,Math.round(g+45))},${Math.min(255,Math.round(b+45))},0.55)`;
+    ctx.arc(orbX - 8, orbY - 8, 5.8, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${Math.min(255, Math.round(r + 38))},${Math.min(255, Math.round(g + 38))},${Math.min(255, Math.round(b + 38))},0.5)`;
     ctx.fill();
 
     [
-      { x: orbX - 34, y: orbY - 18, radius: 1.8, alpha: 0.18 },
-      { x: orbX + 28, y: orbY + 20, radius: 1.4, alpha: 0.14 },
-      { x: orbX + 40, y: orbY - 10, radius: 1.2, alpha: 0.12 },
+      { x: -42, y: -22, radius: 1.8, alpha: 0.16, speed: 1.1 },
+      { x: 34, y: 18, radius: 1.5, alpha: 0.13, speed: 0.9 },
+      { x: 46, y: -12, radius: 1.25, alpha: 0.1, speed: 1.3 },
     ].forEach(mote => {
+      const mx = orbX + mote.x + Math.cos(t * mote.speed + mote.y * 0.02) * 3;
+      const my = orbY + mote.y + Math.sin(t * mote.speed + mote.x * 0.02) * 2.4;
       ctx.beginPath();
-      ctx.arc(mote.x, mote.y, mote.radius + Math.sin(t * 1.5 + mote.x * 0.03) * 0.2, 0, Math.PI * 2);
+      ctx.arc(mx, my, mote.radius + Math.sin(t * 1.35 + mote.x * 0.03) * 0.2, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(${col},${mote.alpha})`;
       ctx.fill();
     });
 
-    const threads: [{ x: number; y: number; c1x: number; c1y: number; c2x: number; c2y: number; alpha: number }, ...Array<{ x: number; y: number; c1x: number; c1y: number; c2x: number; c2y: number; alpha: number }>] = [
-      { x: W() - 18, y: 22, c1x: orbX + 44, c1y: orbY - 26, c2x: W() - 90, c2y: 40, alpha: 0.14 },
-      { x: 22, y: 34, c1x: orbX - 46, c1y: orbY - 18, c2x: 80, c2y: 46, alpha: 0.1 },
-      { x: W() - 24, y: H() - 86, c1x: orbX + 36, c1y: orbY + 26, c2x: W() - 72, c2y: H() - 130, alpha: 0.08 },
-    ];
-    threads.forEach(thread => {
-      ctx.beginPath();
-      ctx.moveTo(orbX, orbY);
-      ctx.bezierCurveTo(thread.c1x, thread.c1y, thread.c2x, thread.c2y, thread.x, thread.y);
-      ctx.strokeStyle = `rgba(${col},${thread.alpha})`;
-      ctx.lineWidth   = 0.45;
-      ctx.setLineDash([2, 5]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    });
+    ctx.restore();
 
   }
 
@@ -940,8 +1121,12 @@
   <CollapseCard
     data={cardData}
     visible={cardVisible}
+    summary={currentTransmutation}
+    transmuting={transmuting}
+    transmuteError={transmuteError}
     on:close={closeCard}
     on:navigate={handleNavigate}
+    on:transmute={transmuteCurrentNode}
   />
 
   <button class="compose-btn" on:click={openCompose}>+ compose</button>
