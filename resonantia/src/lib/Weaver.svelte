@@ -33,6 +33,11 @@
   let graph: GraphResponse | null = null;
   let loading = true;
   let error: string | null = null;
+  let sessionAvecMap: Record<string, { stability: number; friction: number; logic: number; autonomy: number; psi: number }> = {};
+  let nodeAvecMap: Record<string, { stability: number; friction: number; logic: number; autonomy: number; psi: number }> = {};
+
+  const AVEC_DIMS = ['stability', 'friction', 'logic', 'autonomy'] as const;
+  type AvecDim = typeof AVEC_DIMS[number];
 
   const sessionPos: Record<string, Vec2> = {};
   const nodePos:    Record<string, Vec2> = {};
@@ -43,7 +48,7 @@
   let targetCamX = 0, targetCamY = 0, targetCamScale = 1;
 
   const CONSTELLATION_SCALE = 1.2;
-  const WAVE_SCALE     = 4.6;
+  const WAVE_SCALE     = 3.1;
   const COLLAPSE_SCALE = 10.2;
   const LERP           = 0.09;
 
@@ -209,6 +214,21 @@
     };
   }
 
+  function nodeRenderPos(node: GraphNodeDto): Vec2 {
+    const base = nodePos[node.id];
+    if (!base) return { x: W() / 2, y: H() / 2 };
+    if (level === 2) return base;
+
+    const seed = hashUnit(node.syntheticId || node.id);
+    const avec = graphNodeAvec(node);
+    const drift = 2.2 + node.psi * 0.22 + avec.autonomy * 2.1;
+    const sway = 1.4 + avec.logic * 1.2;
+    return {
+      x: base.x + Math.sin(t * (0.34 + avec.friction * 0.12) + seed * Math.PI * 2) * drift,
+      y: base.y + Math.cos(t * (0.28 + avec.stability * 0.08) + seed * Math.PI * 1.6) * sway,
+    };
+  }
+
   function sessionHitRadius(s: GraphSessionDto): number {
     return Math.max(18, (sessionRadius(s) + 14) * camScale);
   }
@@ -223,7 +243,12 @@
     try {
       loading = true;
       error   = null;
-      graph   = await invoke<GraphResponse>('get_graph', { limit: 200, sessionId: null });
+      const [graphRes, nodesRes] = await Promise.all([
+        invoke<GraphResponse>('get_graph', { limit: 200, sessionId: null }),
+        invoke<{ nodes: NodeDto[] }>('list_nodes', { limit: 400, sessionId: null }),
+      ]);
+      graph = graphRes;
+      hydrateAvecMaps(graphRes, nodesRes.nodes);
       layoutConstellation();
       camX = targetCamX = W() / 2;
       camY = targetCamY = H() / 2;
@@ -235,19 +260,338 @@
     }
   }
 
+  function averageAvecStates(states: Array<{ stability: number; friction: number; logic: number; autonomy: number; psi: number }>) {
+    if (!states.length) {
+      return { stability: 0.5, friction: 0.5, logic: 0.5, autonomy: 0.5, psi: 2 };
+    }
+
+    const totals = states.reduce(
+      (acc, state) => ({
+        stability: acc.stability + state.stability,
+        friction: acc.friction + state.friction,
+        logic: acc.logic + state.logic,
+        autonomy: acc.autonomy + state.autonomy,
+        psi: acc.psi + state.psi,
+      }),
+      { stability: 0, friction: 0, logic: 0, autonomy: 0, psi: 0 },
+    );
+
+    return {
+      stability: totals.stability / states.length,
+      friction: totals.friction / states.length,
+      logic: totals.logic / states.length,
+      autonomy: totals.autonomy / states.length,
+      psi: totals.psi / states.length,
+    };
+  }
+
+  function mergedNodeAvec(node: NodeDto) {
+    const states = [node.userAvec, node.modelAvec];
+    if (node.compressionAvec) states.push(node.compressionAvec);
+    return averageAvecStates(states);
+  }
+
+  function hydrateAvecMaps(graphRes: GraphResponse, nodes: NodeDto[]) {
+    const nextNodeAvecMap: Record<string, { stability: number; friction: number; logic: number; autonomy: number; psi: number }> = {};
+    const sessionBuckets: Record<string, Array<{ stability: number; friction: number; logic: number; autonomy: number; psi: number }>> = {};
+
+    nodes.forEach(node => {
+      const avec = mergedNodeAvec(node);
+      nextNodeAvecMap[node.syntheticId] = avec;
+      const key = sessionKey(node.sessionId);
+      if (!sessionBuckets[key]) sessionBuckets[key] = [];
+      sessionBuckets[key].push(avec);
+    });
+
+    const nextSessionAvecMap: Record<string, { stability: number; friction: number; logic: number; autonomy: number; psi: number }> = {};
+
+    graphRes.sessions.forEach(session => {
+      const key = sessionKey(session.id);
+      nextSessionAvecMap[key] = averageAvecStates(sessionBuckets[key] ?? []);
+    });
+
+    sessionAvecMap = nextSessionAvecMap;
+    nodeAvecMap = nextNodeAvecMap;
+  }
+
+  function fallbackAvec(psiValue: number) {
+    const stability = Math.max(0.16, Math.min(0.92, 0.34 + psiValue * 0.08));
+    const friction = Math.max(0.12, Math.min(0.82, 0.2 + psiValue * 0.03));
+    const logic = Math.max(0.18, Math.min(0.94, 0.3 + psiValue * 0.09));
+    const autonomy = Math.max(0.14, Math.min(0.9, 0.28 + psiValue * 0.07));
+    return { stability, friction, logic, autonomy, psi: stability + friction + logic + autonomy };
+  }
+
+  function sessionAvec(session: GraphSessionDto) {
+    return sessionAvecMap[sessionKey(session.id)] ?? fallbackAvec(session.avgPsi);
+  }
+
+  function graphNodeAvec(node: GraphNodeDto) {
+    return nodeAvecMap[node.syntheticId] ?? sessionAvecMap[sessionKey(node.sessionId)] ?? fallbackAvec(node.psi);
+  }
+
+  function fieldAvecRgb(avec: { stability: number; friction: number; logic: number; autonomy: number; psi: number }) {
+    const mixed = avecToRgb(avec);
+    const ordered = ([
+      ['stability', avec.stability],
+      ['friction', avec.friction],
+      ['logic', avec.logic],
+      ['autonomy', avec.autonomy],
+    ] as [AvecDim, number][]).sort((left, right) => right[1] - left[1]);
+    const primary = AVEC_COLORS[ordered[0][0]];
+    const secondary = AVEC_COLORS[ordered[1][0]];
+    const dominance = ordered[0][1] - ordered[2][1];
+    const primaryMix = 0.24 + dominance * 0.18;
+    const secondaryMix = 0.1 + ordered[1][1] * 0.12;
+    const baseMix = Math.max(0.42, 1 - primaryMix - secondaryMix);
+
+    let r = mixed.r * baseMix + primary.r * primaryMix + secondary.r * secondaryMix;
+    let g = mixed.g * baseMix + primary.g * primaryMix + secondary.g * secondaryMix;
+    let b = mixed.b * baseMix + primary.b * primaryMix + secondary.b * secondaryMix;
+
+    const avg = (r + g + b) / 3;
+    const saturationBoost = 1.26 + dominance * 0.9 + avec.autonomy * 0.12;
+    r = avg + (r - avg) * saturationBoost;
+    g = avg + (g - avg) * (saturationBoost + 0.03);
+    b = avg + (b - avg) * (saturationBoost - 0.01);
+
+    const glowLift = 0.062 + avec.stability * 0.105;
+    r += 255 * glowLift * 0.25;
+    g += 255 * glowLift * 0.31;
+    b += 255 * glowLift * 0.26;
+
+    return {
+      r: Math.max(0, Math.min(255, r)),
+      g: Math.max(0, Math.min(255, g)),
+      b: Math.max(0, Math.min(255, b)),
+    };
+  }
+
+  function fieldAvecColor(
+    avec: { stability: number; friction: number; logic: number; autonomy: number; psi: number },
+    alpha = 1,
+  ) {
+    const { r, g, b } = fieldAvecRgb(avec);
+    return `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${alpha})`;
+  }
+
+  function vectorFromAvec(avec: { stability: number; friction: number; logic: number; autonomy: number }) {
+    return {
+      stability: avec.stability,
+      friction: avec.friction,
+      logic: avec.logic,
+      autonomy: avec.autonomy,
+    };
+  }
+
+  function blendCalibrationVectors(left: CalibrationVector, right: CalibrationVector, mix: number): CalibrationVector {
+    return {
+      stability: left.stability * (1 - mix) + right.stability * mix,
+      friction: left.friction * (1 - mix) + right.friction * mix,
+      logic: left.logic * (1 - mix) + right.logic * mix,
+      autonomy: left.autonomy * (1 - mix) + right.autonomy * mix,
+    };
+  }
+
+  function rankedDimensionWeights(vector: CalibrationVector) {
+    const sorted = [...AVEC_DIMS].sort((left, right) => vector[right] - vector[left]);
+    const weights: Record<AvecDim, number> = {
+      stability: 0.22,
+      friction: 0.22,
+      logic: 0.22,
+      autonomy: 0.22,
+    };
+    [1, 0.78, 0.58, 0.38].forEach((weight, index) => {
+      weights[sorted[index]] = weight;
+    });
+    return weights;
+  }
+
+  function resonanceAnchorVector() {
+    return closestCalibrationProfile
+      ? blendCalibrationVectors(currentCalibrationVector, closestCalibrationProfile.profile.values, 0.34)
+      : currentCalibrationVector;
+  }
+
+  function avecSimilarity(
+    left: { stability: number; friction: number; logic: number; autonomy: number },
+    right: { stability: number; friction: number; logic: number; autonomy: number },
+  ) {
+    const distance = calibrationDistance(vectorFromAvec(left), vectorFromAvec(right));
+    return clamp01(1 - distance / 2);
+  }
+
+  function edgeResonanceStrength(
+    sourceAvec: { stability: number; friction: number; logic: number; autonomy: number; psi: number },
+    targetAvec: { stability: number; friction: number; logic: number; autonomy: number; psi: number },
+    kind: string,
+  ) {
+    const similarity = avecSimilarity(sourceAvec, targetAvec);
+    const midpoint = {
+      stability: (sourceAvec.stability + targetAvec.stability) / 2,
+      friction: (sourceAvec.friction + targetAvec.friction) / 2,
+      logic: (sourceAvec.logic + targetAvec.logic) / 2,
+      autonomy: (sourceAvec.autonomy + targetAvec.autonomy) / 2,
+    };
+    const anchorMatch = avecSimilarity(midpoint, resonanceAnchorVector());
+    const kindBias = kind === 'resonance' ? 1 : kind === 'temporal' ? 0.72 : 0.58;
+    return clamp01((similarity * 0.62 + anchorMatch * 0.38) * kindBias);
+  }
+
+  function signatureForAvec(avec: { stability: number; friction: number; logic: number; autonomy: number; psi: number }) {
+    const anchor = resonanceAnchorVector();
+    const rankWeights = rankedDimensionWeights(anchor);
+    const dims = AVEC_DIMS.map(dim => {
+      const affinity = 1 - Math.abs(avec[dim] - anchor[dim]);
+      const score = affinity * 0.56 + avec[dim] * 0.26 + rankWeights[dim] * 0.18;
+      return { dim, score, affinity, value: avec[dim] };
+    }).sort((left, right) => right.score - left.score);
+
+    const euclidean = calibrationDistance(vectorFromAvec(avec), anchor);
+    const resonance = clamp01(1 - euclidean / 2);
+    const spread = Math.max(...dims.map(entry => entry.value)) - Math.min(...dims.map(entry => entry.value));
+
+    return {
+      primary: dims[0].dim,
+      secondary: dims[1].dim,
+      resonance,
+      spread,
+      primaryAffinity: dims[0].affinity,
+      secondaryAffinity: dims[1].affinity,
+    };
+  }
+
+  function signatureAngle(primary: AvecDim, secondary: AvecDim, seed: number) {
+    const baseAngles: Record<AvecDim, number> = {
+      stability: -Math.PI / 2,
+      friction: Math.PI * 0.12,
+      logic: Math.PI * 0.78,
+      autonomy: Math.PI * 1.46,
+    };
+    const secondaryOffset: Record<AvecDim, number> = {
+      stability: -0.26,
+      friction: 0.18,
+      logic: 0.34,
+      autonomy: -0.34,
+    };
+    return baseAngles[primary] + secondaryOffset[secondary] + seed * 0.9;
+  }
+
+  function drawAvecWhisper(
+    x: number,
+    y: number,
+    radius: number,
+    lineWidth: number,
+    avec: { stability: number; friction: number; logic: number; autonomy: number; psi: number },
+    alpha: number,
+    seed: number,
+  ) {
+    const signature = signatureForAvec(avec);
+    const primaryCol = AVEC_COLORS[signature.primary];
+    const secondaryCol = AVEC_COLORS[signature.secondary];
+    const angle = signatureAngle(signature.primary, signature.secondary, seed);
+    const accentAlpha = alpha * (0.54 + signature.resonance * 0.32);
+    const shellTilt = angle + Math.sin(t * 0.3 + seed * 8) * 0.14;
+    const shellW = radius * (1.06 + signature.resonance * 0.12);
+    const shellH = radius * (0.75 + signature.spread * 0.22);
+    const innerW = radius * (0.82 + signature.primaryAffinity * 0.12);
+    const innerH = radius * (0.6 + signature.secondaryAffinity * 0.1);
+    const moteAngle = angle + t * (0.16 + signature.secondaryAffinity * 0.16) + seed * Math.PI * 2;
+    const moteRadius = radius + 2.6 + signature.resonance * 2.2;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(shellTilt);
+
+    ctx.beginPath();
+    ctx.ellipse(0, 0, shellW, shellH, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = fieldAvecColor(avec, alpha * 0.2);
+    ctx.lineWidth = lineWidth;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.ellipse(0, 0, innerW, innerH, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(${primaryCol.r},${primaryCol.g},${primaryCol.b},${accentAlpha * 0.6})`;
+    ctx.lineWidth = lineWidth * 0.8;
+    ctx.stroke();
+
+    ctx.restore();
+
+    const moteX = x + Math.cos(moteAngle) * moteRadius;
+    const moteY = y + Math.sin(moteAngle) * (moteRadius * 0.72);
+    ctx.beginPath();
+    ctx.arc(moteX, moteY, Math.max(0.9, lineWidth * 0.95), 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${secondaryCol.r},${secondaryCol.g},${secondaryCol.b},${alpha * 0.48})`;
+    ctx.fill();
+
+    const traces = [
+      {
+        side: Math.sin(seed * Math.PI * 2) > 0 ? 1 : -1,
+        offset: -radius * 0.2,
+        amp: 1,
+        lead: primaryCol,
+        tail: secondaryCol,
+        alphaScale: 1,
+      },
+      {
+        side: Math.sin(seed * Math.PI * 2) > 0 ? -1 : 1,
+        offset: radius * 0.14,
+        amp: 0.82,
+        lead: secondaryCol,
+        tail: primaryCol,
+        alphaScale: 0.72,
+      },
+    ];
+
+    traces.forEach((trace, index) => {
+      const startX = x + trace.side * (radius + 10 + signature.resonance * 7 + index * 2);
+      const endX = x + trace.side * (radius * (0.8 + index * 0.04));
+      const baseY = y + trace.offset + Math.sin(t * (0.36 + index * 0.06) + seed * (6 + index)) * (1.4 + signature.spread * 2.1);
+      const midX = (startX + endX) / 2;
+      const wave = Math.sin(t * (0.48 + signature.secondaryAffinity * 0.24 + index * 0.05) + seed * (9 + index * 2))
+        * (2.8 + signature.primaryAffinity * 2.2) * trace.amp;
+      const cp1x = midX;
+      const cp1y = baseY + wave;
+      const cp2x = endX + trace.side * (8 + index * 2);
+      const cp2y = baseY - wave * 0.48;
+      const grad = ctx.createLinearGradient(startX, baseY, endX, baseY);
+
+      if (trace.side < 0) {
+        grad.addColorStop(0, `rgba(${trace.tail.r},${trace.tail.g},${trace.tail.b},0)`);
+        grad.addColorStop(0.4, `rgba(${trace.tail.r},${trace.tail.g},${trace.tail.b},${alpha * 0.16 * trace.alphaScale})`);
+        grad.addColorStop(0.88, `rgba(${trace.lead.r},${trace.lead.g},${trace.lead.b},${accentAlpha * 0.28 * trace.alphaScale})`);
+        grad.addColorStop(1, `rgba(${trace.lead.r},${trace.lead.g},${trace.lead.b},0)`);
+      } else {
+        grad.addColorStop(0, `rgba(${trace.tail.r},${trace.tail.g},${trace.tail.b},0)`);
+        grad.addColorStop(0.16, `rgba(${trace.tail.r},${trace.tail.g},${trace.tail.b},${alpha * 0.14 * trace.alphaScale})`);
+        grad.addColorStop(0.7, `rgba(${trace.lead.r},${trace.lead.g},${trace.lead.b},${accentAlpha * 0.26 * trace.alphaScale})`);
+        grad.addColorStop(1, `rgba(${trace.lead.r},${trace.lead.g},${trace.lead.b},0)`);
+      }
+
+      ctx.beginPath();
+      ctx.moveTo(startX, baseY);
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, y + Math.sin(shellTilt) * radius * 0.14 + trace.offset * 0.18);
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = Math.max(0.34, lineWidth * (0.56 - index * 0.1));
+      ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+    });
+  }
+
   function layoutConstellation() {
     if (!graph) return;
     Object.keys(sessionPos).forEach(key => delete sessionPos[key]);
     Object.keys(nodePos).forEach(key => delete nodePos[key]);
     const cx = W() / 2, cy = H() / 2;
     const n  = graph.sessions.length;
-    const spread = Math.min(W(), H()) * 0.3;
+    const spread = Math.min(W(), H()) * 0.32;
     const goldenAngle = Math.PI * (3 - Math.sqrt(5));
 
     graph.sessions.forEach((s, i) => {
       const seed = hashUnit(s.id);
       const angle = i * goldenAngle + seed * 1.8;
-      const radial = spread * (0.24 + Math.sqrt((i + 0.5) / Math.max(1, n)) * 0.74);
+      const radial = spread * (0.26 + Math.sqrt((i + 0.5) / Math.max(1, n)) * 0.78);
       const bendX = Math.sin(angle * 1.4 + seed * 8) * spread * 0.16;
       const bendY = Math.cos(angle * 1.1 + seed * 6) * spread * 0.12;
       sessionPos[s.id] = {
@@ -261,12 +605,12 @@
       if (!sp) return;
 
         const sessionNodes = graph!.nodes.filter(node => sessionKey(node.sessionId) === sessionKey(session.id));
-      const orbitRadius = Math.max(54, sessionRadius(session) + 20);
+      const orbitRadius = sessionOrbitRadius(session, sessionNodes.length);
       const seed = sessionIndex * 0.73 + session.id.length * 0.11;
 
       sessionNodes.forEach((node, nodeIndex) => {
         const progress = (nodeIndex + 1) / (sessionNodes.length + 1);
-        const radial = orbitRadius * (0.24 + Math.sqrt(progress) * 0.78);
+        const radial = orbitRadius * (0.34 + Math.sqrt(progress) * 0.88);
         const angle = seed + nodeIndex * 2.399963229728653;
         nodePos[node.id] = {
           x: sp.x + Math.cos(angle) * radial,
@@ -276,8 +620,22 @@
     });
   }
 
-  function sessionRadius(s: GraphSessionDto) { return 10 + s.nodeCount * 2.2; }
-  function nodeRadius(n: GraphNodeDto)        { return 4.2 + n.psi * 1.35;    }
+  function sessionRadius(s: GraphSessionDto) { return 8 + s.nodeCount * 1.65; }
+  function nodeRadius(n: GraphNodeDto)        { return 3.4 + n.psi * 1.08;    }
+
+  function sessionOrbitRadius(session: GraphSessionDto, nodeCount?: number) {
+    const count = nodeCount ?? graph?.nodes.filter(node => sessionKey(node.sessionId) === sessionKey(session.id)).length ?? session.nodeCount;
+    return Math.max(66, sessionRadius(session) + 28 + Math.min(count, 10) * 2.4);
+  }
+
+  function waveCameraScale(session: GraphSessionDto) {
+    const orbitRadius = sessionOrbitRadius(session);
+    const worldHalfWidth = orbitRadius + 24;
+    const worldHalfHeight = orbitRadius * 0.76 + 28;
+    const fitX = (W() * 0.4) / Math.max(worldHalfWidth, 1);
+    const fitY = (H() * 0.32) / Math.max(worldHalfHeight, 1);
+    return Math.max(2.05, Math.min(WAVE_SCALE, Math.min(fitX, fitY)));
+  }
 
   function collapseDescriptors(avec: { stability: number; friction: number; logic: number; autonomy: number }): string {
     const dims: [string, number][] = [
@@ -312,7 +670,11 @@
     closeCard();
     level = 1;
     const sp = sessionRenderPos(s);
-    if (sp) { targetCamX = sp.x; targetCamY = sp.y; targetCamScale = WAVE_SCALE; }
+    if (sp) {
+      targetCamX = sp.x;
+      targetCamY = sp.y + sessionOrbitRadius(s) * 0.03;
+      targetCamScale = waveCameraScale(s);
+    }
   }
 
   async function descendToCollapse(n: GraphNodeDto) {
@@ -321,7 +683,7 @@
     level        = 2;
     transmuteError = null;
     transmuting = false;
-    const np = nodePos[n.id];
+    const np = nodeRenderPos(n);
     if (np) { targetCamX = np.x; targetCamY = np.y; targetCamScale = COLLAPSE_SCALE; }
 
     cardData = {
@@ -347,7 +709,11 @@
     level = 1;
     if (selectedSession) {
       const sp = sessionPos[selectedSession.id];
-      if (sp) { targetCamX = sp.x; targetCamY = sp.y; targetCamScale = WAVE_SCALE; }
+      if (sp) {
+        targetCamX = sp.x;
+        targetCamY = sp.y + sessionOrbitRadius(selectedSession) * 0.03;
+        targetCamScale = waveCameraScale(selectedSession);
+      }
     }
   }
 
@@ -430,19 +796,37 @@
       const sp = sessionRenderPos(sourceSession);
       const tp = sessionRenderPos(targetSession);
       if (!sp || !tp) return;
+      const sourceAvec = sessionAvec(sourceSession);
+      const targetAvec = sessionAvec(targetSession);
+      const strength = edgeResonanceStrength(sourceAvec, targetAvec, e.kind);
+      const midpointAvec = {
+        stability: (sourceAvec.stability + targetAvec.stability) / 2,
+        friction: (sourceAvec.friction + targetAvec.friction) / 2,
+        logic: (sourceAvec.logic + targetAvec.logic) / 2,
+        autonomy: (sourceAvec.autonomy + targetAvec.autonomy) / 2,
+        psi: (sourceAvec.psi + targetAvec.psi) / 2,
+      };
       const mx = (sp.x + tp.x) / 2 + Math.sin(e.id.length * 0.7) * 30;
       const my = (sp.y + tp.y) / 2 + Math.cos(e.id.length * 0.5) * 20;
       const grad = ctx.createLinearGradient(sp.x, sp.y, tp.x, tp.y);
-      grad.addColorStop(0,    'rgba(255,255,255,0)');
-      grad.addColorStop(0.35, 'rgba(255,255,255,0.06)');
-      grad.addColorStop(0.5,  e.kind === 'resonance' ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.04)');
-      grad.addColorStop(0.65, 'rgba(255,255,255,0.06)');
-      grad.addColorStop(1,    'rgba(255,255,255,0)');
+      grad.addColorStop(0, fieldAvecColor(sourceAvec, 0));
+      grad.addColorStop(0.28, fieldAvecColor(sourceAvec, 0.05 + strength * 0.08));
+      grad.addColorStop(0.5, fieldAvecColor(midpointAvec, 0.06 + strength * 0.1));
+      grad.addColorStop(0.72, fieldAvecColor(targetAvec, 0.05 + strength * 0.08));
+      grad.addColorStop(1, fieldAvecColor(targetAvec, 0));
+
+      ctx.beginPath();
+      ctx.moveTo(sp.x, sp.y);
+      ctx.quadraticCurveTo(mx, my, tp.x, tp.y);
+      ctx.strokeStyle = fieldAvecColor(midpointAvec, 0.01 + strength * 0.035);
+      ctx.lineWidth = (0.8 + strength * 3.2) / camScale;
+      ctx.stroke();
+
       ctx.beginPath();
       ctx.moveTo(sp.x, sp.y);
       ctx.quadraticCurveTo(mx, my, tp.x, tp.y);
       ctx.strokeStyle = grad;
-      ctx.lineWidth   = (e.kind === 'resonance' ? 0.8 : 0.4) / camScale;
+      ctx.lineWidth   = ((e.kind === 'resonance' ? 0.24 : 0.14) + strength * (e.kind === 'resonance' ? 0.72 : 0.42)) / camScale;
       ctx.setLineDash(e.kind === 'temporal' ? [3, 6] : []);
       ctx.stroke();
       ctx.setLineDash([]);
@@ -451,17 +835,18 @@
 
   function drawSessions() {
     if (!graph) return;
-    const baseAvec = { stability:0.7, friction:0.2, logic:0.8, autonomy:0.85, psi:2.55 };
 
     graph.sessions.forEach(s => {
       const sp      = sessionRenderPos(s);
       if (!sp) return;
       const isFocus = selectedSession?.id === s.id;
+      const av = sessionAvec(s);
+      const seed = hashUnit(s.id);
 
       if (level > 0 && !isFocus) {
         ctx.beginPath();
         ctx.arc(sp.x, sp.y, 2, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255,255,255,0.07)';
+        ctx.fillStyle = fieldAvecColor(av, 0.42);
         ctx.fill();
         return;
       }
@@ -472,25 +857,27 @@
         : Math.sin(t * 1.1 + sp.x * 0.008) * 1.2;
 
       ctx.beginPath();
-      ctx.arc(sp.x, sp.y, r + pulse + 12, 0, Math.PI * 2);
-      ctx.fillStyle = avecColor(baseAvec, 0.03);
+      ctx.arc(sp.x, sp.y, r + pulse + 8, 0, Math.PI * 2);
+      ctx.fillStyle = fieldAvecColor(av, isFocus ? 0.12 : 0.09);
       ctx.fill();
 
       ctx.beginPath();
       ctx.arc(sp.x, sp.y, r + pulse, 0, Math.PI * 2);
-      ctx.fillStyle   = avecColor(baseAvec, isFocus ? 0.14 : 0.07);
+      ctx.fillStyle   = fieldAvecColor(av, isFocus ? 0.45 : 0.29);
       ctx.fill();
-      ctx.strokeStyle = avecColor(baseAvec, isFocus ? 0.48 : 0.18);
-      ctx.lineWidth   = (isFocus ? 0.8 : 0.5) / camScale;
+      ctx.strokeStyle = fieldAvecColor(av, isFocus ? 0.9 : 0.62);
+      ctx.lineWidth   = (isFocus ? 0.82 : 0.56) / camScale;
       ctx.stroke();
+
+      drawAvecWhisper(sp.x, sp.y, r + pulse + 3.8, (isFocus ? 1.45 : 0.78) / camScale, av, isFocus ? 0.44 : 0.3, seed);
 
       ctx.beginPath();
       ctx.arc(sp.x, sp.y, 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = avecColor(baseAvec, 0.9);
+      ctx.fillStyle = fieldAvecColor(av, 0.98);
       ctx.fill();
 
       if (level === 0 && r > 18) {
-        ctx.fillStyle = 'rgba(255,255,255,0.22)';
+        ctx.fillStyle = fieldAvecColor(av, 0.92);
         ctx.font      = `10px ${FONT_MONO}`;
         ctx.textAlign = 'center';
         ctx.fillText(shortLabel(s.label, 3), sp.x, sp.y + r + 15);
@@ -502,21 +889,22 @@
     if (level !== 1 || !selectedSession) return;
     const sp = sessionPos[selectedSession.id];
     if (!sp) return;
-    const orbit = Math.max(54, sessionRadius(selectedSession) + 20);
+    const av = sessionAvec(selectedSession);
+    const orbit = sessionOrbitRadius(selectedSession);
     const rx  = orbit + 18;
     const ry  = (orbit + 18) * 0.74;
     const oda = 4 + Math.sin(t * 0.5);
 
     ctx.beginPath();
     ctx.ellipse(sp.x, sp.y, rx + 22, ry + 16, 0, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(122,170,122,0.04)';
+    ctx.strokeStyle = fieldAvecColor(av, 0.24);
     ctx.lineWidth   = 12 / camScale;
     ctx.setLineDash([]);
     ctx.stroke();
 
     ctx.beginPath();
     ctx.ellipse(sp.x, sp.y, rx, ry, 0, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(122,170,122,0.2)';
+    ctx.strokeStyle = fieldAvecColor(av, 0.68);
     ctx.lineWidth   = 0.5 / camScale;
     ctx.setLineDash([oda, oda * 1.6]);
     ctx.stroke();
@@ -532,70 +920,98 @@
     const sessionNodes = graph.nodes.filter(n => sessionKey(n.sessionId) === sessionKey(session.id));
     if (sessionNodes.length === 0) return;
 
-    ctx.strokeStyle = 'rgba(122,170,122,0.16)';
+    const baseAvec = sessionAvec(session);
     ctx.lineWidth = 0.6 / camScale;
 
     sessionNodes.forEach((node, index) => {
-      const np = nodePos[node.id];
+      const np = nodeRenderPos(node);
       if (!np) return;
+      const nav = graphNodeAvec(node);
+      const strength = avecSimilarity(baseAvec, nav);
+      const grad = ctx.createLinearGradient(sp.x, sp.y, np.x, np.y);
+      grad.addColorStop(0, fieldAvecColor(baseAvec, 0.16));
+      grad.addColorStop(0.54, fieldAvecColor(nav, 0.14 + strength * 0.16));
+      grad.addColorStop(1, fieldAvecColor(nav, 0.04));
 
       ctx.beginPath();
       ctx.moveTo(sp.x, sp.y);
       ctx.lineTo(np.x, np.y);
+      ctx.strokeStyle = fieldAvecColor(nav, 0.01 + strength * 0.028);
+      ctx.lineWidth = (0.55 + strength * 1.4) / camScale;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(sp.x, sp.y);
+      ctx.lineTo(np.x, np.y);
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = (0.18 + strength * 0.48) / camScale;
       ctx.stroke();
 
       if (index > 0) {
-        const prev = nodePos[sessionNodes[index - 1].id];
+        const prev = nodeRenderPos(sessionNodes[index - 1]);
         if (!prev) return;
+        const prevAvec = graphNodeAvec(sessionNodes[index - 1]);
+        const linkStrength = avecSimilarity(prevAvec, nav);
+        const linkGrad = ctx.createLinearGradient(prev.x, prev.y, np.x, np.y);
+        linkGrad.addColorStop(0, fieldAvecColor(prevAvec, 0.23));
+        linkGrad.addColorStop(1, fieldAvecColor(nav, 0.12 + linkStrength * 0.12));
         ctx.beginPath();
         ctx.moveTo(prev.x, prev.y);
         ctx.lineTo(np.x, np.y);
-        ctx.strokeStyle = 'rgba(122,170,122,0.11)';
+        ctx.strokeStyle = fieldAvecColor(nav, 0.008 + linkStrength * 0.022);
+        ctx.lineWidth = (0.42 + linkStrength * 0.9) / camScale;
         ctx.stroke();
-        ctx.strokeStyle = 'rgba(122,170,122,0.16)';
+        ctx.beginPath();
+        ctx.moveTo(prev.x, prev.y);
+        ctx.lineTo(np.x, np.y);
+        ctx.strokeStyle = linkGrad;
+        ctx.lineWidth = (0.14 + linkStrength * 0.34) / camScale;
+        ctx.stroke();
       }
     });
   }
 
   function drawNodes() {
     if (!graph || level < 1 || !selectedSession) return;
-    const av = { stability:0.75, friction:0.18, logic:0.85, autonomy:0.9, psi:2.68 };
     const sessionNodes = graph.nodes.filter(n => sessionKey(n.sessionId) === sessionKey(selectedSession!.id));
 
     sessionNodes.forEach(n => {
-      const np = nodePos[n.id];
+      const np = nodeRenderPos(n);
       if (!np) return;
       const r          = nodeRadius(n);
       const isSelected = selectedNode?.id === n.id;
+      const av = graphNodeAvec(n);
+      const seed = hashUnit(n.syntheticId || n.id);
 
       if (level === 2 && !isSelected) {
         ctx.beginPath();
         ctx.arc(np.x, np.y, 2.6, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        ctx.fillStyle = fieldAvecColor(av, 0.32);
         ctx.fill();
         return;
       }
 
       const pulse = Math.sin(t * 1.8 + np.x * 0.04);
       const tierAlpha = n.tier === 'daily' ? 0.32 : n.tier === 'weekly' ? 0.28 : 0.24;
-      const outerAlpha = isSelected ? 0.16 : 0.1;
 
       ctx.beginPath();
-      ctx.arc(np.x, np.y, r + pulse + 7, 0, Math.PI * 2);
-      ctx.fillStyle = avecColor(av, outerAlpha);
+      ctx.arc(np.x, np.y, r + pulse + 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = fieldAvecColor(av, isSelected ? 0.28 : 0.18);
       ctx.fill();
 
       ctx.beginPath();
       ctx.arc(np.x, np.y, r + pulse, 0, Math.PI * 2);
-      ctx.fillStyle   = avecColor(av, isSelected ? 0.72 : tierAlpha);
+      ctx.fillStyle   = fieldAvecColor(av, isSelected ? 0.92 : tierAlpha * 1.34);
       ctx.fill();
-      ctx.strokeStyle = avecColor(av, isSelected ? 0.95 : 0.38);
+      ctx.strokeStyle = fieldAvecColor(av, isSelected ? 1 : 0.68);
       ctx.lineWidth   = (isSelected ? 0.9 : 0.6) / camScale;
       ctx.stroke();
 
+      drawAvecWhisper(np.x, np.y, r + pulse + 2.6, (isSelected ? 1.06 : 0.58) / camScale, av, isSelected ? 0.5 : 0.3, seed);
+
       ctx.beginPath();
       ctx.arc(np.x, np.y, Math.max(2.2, r * 0.34), 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(232,245,245,0.78)';
+      ctx.fillStyle = fieldAvecColor(av, 0.94);
       ctx.fill();
 
     });
@@ -613,25 +1029,27 @@
       .slice(0, Math.min(4, sessionNodes.length));
 
     labeledMoments.forEach(node => {
-      const np = nodePos[node.id];
+      const np = nodeRenderPos(node);
       if (!np) return;
+      const nav = graphNodeAvec(node);
       const sc = toScreen(np.x, np.y);
       ctx.textAlign = 'center';
       ctx.font = `600 8px ${FONT_MONO}`;
       ctx.strokeStyle = 'rgba(7,10,13,0.85)';
       ctx.lineWidth = 2.4;
       ctx.strokeText(momentWhisperLabel(node), sc.x, sc.y + 22);
-      ctx.fillStyle = 'rgba(196,223,196,0.42)';
+      ctx.fillStyle = fieldAvecColor(nav, 0.9);
       ctx.fillText(momentWhisperLabel(node), sc.x, sc.y + 22);
     });
 
     const center = toScreen(sp.x, sp.y);
+    const av = sessionAvec(session);
     ctx.textAlign = 'center';
     ctx.font = `600 9px ${FONT_MONO}`;
     ctx.strokeStyle = 'rgba(7,10,13,0.9)';
     ctx.lineWidth = 2.8;
     ctx.strokeText(waveTitle(session), center.x, center.y + 28);
-    ctx.fillStyle = 'rgba(210,228,210,0.46)';
+    ctx.fillStyle = fieldAvecColor(av, 0.94);
     ctx.fillText(waveTitle(session), center.x, center.y + 28);
   }
 
@@ -908,7 +1326,7 @@
     if (level === 1 && selectedSession) {
       const sessionNodes = graph?.nodes.filter(n => sessionKey(n.sessionId) === sessionKey(selectedSession!.id)) ?? [];
       for (const n of sessionNodes) {
-        const np = nodePos[n.id];
+        const np = nodeRenderPos(n);
         if (!np) continue;
         const sc = toScreen(np.x, np.y);
         if (Math.hypot(sx - sc.x, sy - sc.y) < nodeHitRadius(n)) {
@@ -1161,6 +1579,40 @@
     };
   }
 
+  function asAvecState(values: CalibrationVector) {
+    return {
+      ...values,
+      psi: values.stability + values.friction + values.logic + values.autonomy,
+    };
+  }
+
+  function calibrationSurfaceStyle(values: CalibrationVector, intensity = 1) {
+    const avec = asAvecState(values);
+    const glow = avecColor(avec, 0.16 * intensity);
+    const edge = avecColor(avec, 0.3 * intensity);
+    const wash = avecColor(avec, 0.07 * intensity);
+    return `background: radial-gradient(circle at top left, ${glow}, transparent 62%), linear-gradient(160deg, ${wash}, rgba(255,255,255,0.02)); border-color: ${edge}; box-shadow: inset 0 0 0 1px ${avecColor(avec, 0.05 * intensity)};`;
+  }
+
+  function calibrationSpectrumStyle(values: CalibrationVector) {
+    const total = Math.max(values.stability + values.friction + values.logic + values.autonomy, 0.001);
+    const stabilityStop = (values.stability / total) * 100;
+    const frictionStop = stabilityStop + (values.friction / total) * 100;
+    const logicStop = frictionStop + (values.logic / total) * 100;
+    return `background: linear-gradient(90deg, ${AVEC_HEX.stability} 0%, ${AVEC_HEX.stability} ${stabilityStop}%, ${AVEC_HEX.friction} ${stabilityStop}%, ${AVEC_HEX.friction} ${frictionStop}%, ${AVEC_HEX.logic} ${frictionStop}%, ${AVEC_HEX.logic} ${logicStop}%, ${AVEC_HEX.autonomy} ${logicStop}%, ${AVEC_HEX.autonomy} 100%);`;
+  }
+
+  function calibrationAuraStyle(values: CalibrationVector) {
+    const avec = asAvecState(values);
+    return `background: linear-gradient(135deg, ${avecColor(avec, 1)}, ${avecColor({
+      stability: values.autonomy,
+      friction: values.stability,
+      logic: values.friction,
+      autonomy: values.logic,
+      psi: values.autonomy + values.stability + values.friction + values.logic,
+    }, 1)}); box-shadow: 0 0 18px ${avecColor(avec, 0.24)};`;
+  }
+
   function openCompose() {
     composeSessionId = selectedSession?.id ?? '';
     composeError = null; composeResult = null;
@@ -1313,8 +1765,8 @@
         </button>
         {#if menuOpen}
           <div class="menu-popover" role="menu" aria-label="Weaver actions">
-            <button class="menu-item" on:click={() => { menuOpen = false; loadGraph(); }}>refresh</button>
-            <button class="menu-item" on:click={openCalibrate}>calibrate</button>
+            <button class="menu-item" on:click={() => { menuOpen = false; loadGraph(); }}>refresh view</button>
+            <button class="menu-item" on:click={openCalibrate}>check in</button>
             <button class="menu-item" on:click={openSettings}>settings</button>
           </div>
         {/if}
@@ -1355,17 +1807,19 @@
   {/if}
 
   {#if calibrateOpen}
-    <div class="drawer" role="dialog" aria-label="Calibrate session">
+    <div class="drawer" role="dialog" aria-label="Find your current mode">
       <div class="drawer-header">
         <span class="drawer-title">find your current mode</span>
         <button class="close-btn" on:click={() => (calibrateOpen = false)}>✕</button>
       </div>
       <input class="drawer-input" type="text" placeholder="session name or id" bind:value={calibSessionId} />
-      <section class="calibration-panel">
+      <p class="calibration-intro">Pick the mode that feels closest, or answer a few quick questions and adjust it gently below.</p>
+      <section class="calibration-panel" style={calibrationSurfaceStyle(currentCalibrationVector, 1.15)}>
         <div class="calibration-topline">
           <span class="calibration-kicker">current mode</span>
           <span class="calibration-psi">signal {calibrationPsi.toFixed(2)}</span>
         </div>
+        <div class="calibration-spectrum" style={calibrationSpectrumStyle(currentCalibrationVector)}></div>
         {#if closestCalibrationProfile}
           <p class="calibration-profile-name">{closestCalibrationProfile.profile.label}</p>
           <p class="calibration-profile-blurb">{closestCalibrationProfile.profile.blurb}</p>
@@ -1376,8 +1830,10 @@
           <button
             class="profile-chip"
             class:selected={closestCalibrationProfile?.profile.id === profile.id}
+            style={calibrationSurfaceStyle(profile.values, closestCalibrationProfile?.profile.id === profile.id ? 1.35 : 0.9)}
             on:click={() => applyCalibrationProfile(profile)}
           >
+            <i class="profile-aura" aria-hidden="true" style={calibrationAuraStyle(profile.values)}></i>
             <span>{profile.label}</span>
             <small>{profile.blurb}</small>
           </button>
@@ -1401,8 +1857,10 @@
                   <button
                     class="guide-option"
                     class:selected={guideAnswers[questionIndex] === optionIndex}
+                    style={calibrationSurfaceStyle(option.values, guideAnswers[questionIndex] === optionIndex ? 1.15 : 0.72)}
                     on:click={() => selectGuideAnswer(questionIndex, optionIndex)}
                   >
+                    <i class="guide-aura" aria-hidden="true" style={calibrationAuraStyle(option.values)}></i>
                     <span>{option.label}</span>
                     <small>{option.note}</small>
                   </button>
@@ -1412,25 +1870,26 @@
           {/each}
         </section>
       {/if}
+      <p class="calibration-subhead">fine tune</p>
       <div class="slider-row">
         <span class="slider-label" style="color:{AVEC_HEX.stability}">grounding</span>
-        <input type="range" min="0" max="1" step="0.01" bind:value={calibStability} class="avec-slider" />
-        <span class="slider-val">{calibStability.toFixed(2)}</span>
+        <input type="range" min="0" max="1" step="0.01" bind:value={calibStability} class="avec-slider" style="accent-color: {AVEC_HEX.stability};" />
+        <span class="slider-val" style="color:{AVEC_HEX.stability}">{calibStability.toFixed(2)}</span>
       </div>
       <div class="slider-row">
         <span class="slider-label" style="color:{AVEC_HEX.friction}">drive</span>
-        <input type="range" min="0" max="1" step="0.01" bind:value={calibFriction} class="avec-slider" />
-        <span class="slider-val">{calibFriction.toFixed(2)}</span>
+        <input type="range" min="0" max="1" step="0.01" bind:value={calibFriction} class="avec-slider" style="accent-color: {AVEC_HEX.friction};" />
+        <span class="slider-val" style="color:{AVEC_HEX.friction}">{calibFriction.toFixed(2)}</span>
       </div>
       <div class="slider-row">
         <span class="slider-label" style="color:{AVEC_HEX.logic}">clarity</span>
-        <input type="range" min="0" max="1" step="0.01" bind:value={calibLogic} class="avec-slider" />
-        <span class="slider-val">{calibLogic.toFixed(2)}</span>
+        <input type="range" min="0" max="1" step="0.01" bind:value={calibLogic} class="avec-slider" style="accent-color: {AVEC_HEX.logic};" />
+        <span class="slider-val" style="color:{AVEC_HEX.logic}">{calibLogic.toFixed(2)}</span>
       </div>
       <div class="slider-row">
         <span class="slider-label" style="color:{AVEC_HEX.autonomy}">self-trust</span>
-        <input type="range" min="0" max="1" step="0.01" bind:value={calibAutonomy} class="avec-slider" />
-        <span class="slider-val">{calibAutonomy.toFixed(2)}</span>
+        <input type="range" min="0" max="1" step="0.01" bind:value={calibAutonomy} class="avec-slider" style="accent-color: {AVEC_HEX.autonomy};" />
+        <span class="slider-val" style="color:{AVEC_HEX.autonomy}">{calibAutonomy.toFixed(2)}</span>
       </div>
       <p class="calibration-source">saved from {calibTrigger.replaceAll('_', ' ')}</p>
       {#if calibError}<p class="drawer-error">{calibError}</p>{/if}
@@ -1719,6 +2178,21 @@
   .avec-slider  { flex: 1; accent-color: rgba(255,255,255,0.4); height: 2px; }
   .slider-val   { font-size: 10px; color: rgba(255,255,255,0.4); width: 32px; text-align: right; flex-shrink: 0; }
 
+  .calibration-intro {
+    margin: 0 0 12px;
+    font-size: 10px;
+    line-height: 1.55;
+    color: rgba(255, 255, 255, 0.48);
+  }
+
+  .calibration-subhead {
+    margin: 2px 0 10px;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.34);
+  }
+
   .calibration-source {
     margin: 4px 0 0;
     font-size: 9px;
@@ -1731,10 +2205,15 @@
     margin-bottom: 12px;
     padding: 12px 13px 11px;
     border-radius: 10px;
-    background:
-      radial-gradient(circle at top left, rgba(170, 145, 82, 0.14), transparent 58%),
-      rgba(255, 255, 255, 0.035);
     border: 0.5px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .calibration-spectrum {
+    width: 100%;
+    height: 6px;
+    border-radius: 999px;
+    margin-bottom: 10px;
+    opacity: 0.9;
   }
 
   .calibration-topline {
@@ -1784,17 +2263,27 @@
   }
 
   .profile-chip {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 4px;
     width: 100%;
     padding: 9px 10px;
     text-align: left;
-    background: rgba(255, 255, 255, 0.03);
     border: 0.5px solid rgba(255, 255, 255, 0.08);
     border-radius: 9px;
     color: rgba(255, 255, 255, 0.72);
     transition: background 0.2s, border-color 0.2s, color 0.2s;
+    overflow: hidden;
+  }
+
+  .profile-aura,
+  .guide-aura {
+    display: block;
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    margin-bottom: 3px;
   }
 
   .profile-chip span {
@@ -1811,9 +2300,9 @@
 
   .profile-chip:hover,
   .profile-chip.selected {
-    background: rgba(255, 245, 220, 0.07);
     border-color: rgba(214, 184, 109, 0.34);
     color: rgba(255, 248, 233, 0.92);
+    transform: translateY(-1px);
   }
 
   .guide-actions {
@@ -1872,6 +2361,7 @@
   }
 
   .guide-option {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 3px;
@@ -1880,9 +2370,9 @@
     text-align: left;
     border-radius: 8px;
     border: 0.5px solid rgba(255, 255, 255, 0.08);
-    background: rgba(0, 0, 0, 0.16);
     color: rgba(255, 255, 255, 0.68);
     transition: background 0.2s, border-color 0.2s, color 0.2s;
+    overflow: hidden;
   }
 
   .guide-option span {
@@ -1898,7 +2388,6 @@
 
   .guide-option:hover,
   .guide-option.selected {
-    background: rgba(255, 245, 220, 0.065);
     border-color: rgba(214, 184, 109, 0.3);
     color: rgba(255, 248, 233, 0.9);
   }
