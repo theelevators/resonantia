@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import { openUrl } from '@tauri-apps/plugin-opener';
   import { AVEC_HEX, avecColor, formatTimestamp } from './avec';
   import type { AiSummary, CollapseCardData } from './types';
 
@@ -21,7 +22,28 @@
   $: timestamp    = data?.node.timestamp ? formatTimestamp(data.node.timestamp) : '—';
   $: tier         = data?.node.tier ?? '—';
   let summaryOpen = false;
+  let aiMenu: 'context' | 'compression' | null = null;
+  let aiBusy = false;
+  let aiStatus: string | null = null;
+  let lastSyntheticId: string | null = null;
+
+  const AI_SERVICES = [
+    { id: 'chatgpt', label: 'ChatGPT', baseUrl: 'https://chatgpt.com/' },
+    { id: 'claude', label: 'Claude', baseUrl: 'https://claude.ai/new' },
+    { id: 'perplexity', label: 'Perplexity', baseUrl: 'https://www.perplexity.ai/search/new' },
+  ] as const;
+
+  type AiServiceId = typeof AI_SERVICES[number]['id'];
+
   $: if (summary) summaryOpen = true;
+  $: {
+    const nextSyntheticId = data?.node.syntheticId ?? null;
+    if (nextSyntheticId !== lastSyntheticId) {
+      lastSyntheticId = nextSyntheticId;
+      aiMenu = null;
+      aiStatus = null;
+    }
+  }
   $: shellStyle = [
     'position:fixed',
     'bottom:18px',
@@ -54,6 +76,162 @@
     }
     dispatch('transmute');
   }
+
+  function toggleAiMenu(nextMenu: 'context' | 'compression') {
+    aiMenu = aiMenu === nextMenu ? null : nextMenu;
+    aiStatus = null;
+  }
+
+  async function copyText(text: string) {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+
+    if (typeof document !== 'undefined') {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return;
+    }
+
+    throw new Error('Clipboard is not available in this context.');
+  }
+
+  function buildContextPrimePrompt() {
+    if (!data?.node || !data.nodeDto) return '';
+
+    return [
+      '⏣ Spatio-Temporal Transfer Protocol (STTP): an experimental typed IR for persistent stateful communication between language models and humans — a problem the field has not yet solved.',
+      'Envelope carries session metadata. Content carries confidence-weighted compressed payload. Metrics carry validation signals.',
+      'Attractor vectors follow V_a = (1-μ)×baseline + μ×target. Ψ = Σ(V_a) is the coherence checksum.',
+      'Attractor values are descriptive measurements. model_avec defines the confidence baseline for this interaction.',
+      '',
+      'A protocol called STTP is being used in this conversation to preserve continuity across time.',
+      'Its purpose is simple: keep the thread alive without losing the important parts of the conversation when context shifts, sessions change, or the exchange needs to be resumed later.',
+      '',
+      'Please treat the node below as live conversational memory.',
+      'Use it to understand what is happening now, what matters most, and where the conversation should continue next.',
+      'You do not need to explain the protocol unless the user asks. Just let it quietly improve continuity, memory, and relevance.',
+      '',
+      'After reading it, respond by:',
+      '1. naming the core thread in plain language,',
+      '2. identifying the most important continuation point,',
+      '3. proposing the next best move without losing the node\'s tone.',
+      '4. keeping the relationship between this node and the current conversation intact over time.',
+      '',
+      `Session: ${data.nodeDto.sessionId}`,
+      `Tier: ${data.nodeDto.tier}`,
+      `Timestamp: ${data.nodeDto.timestamp}`,
+      `Psi: ${data.nodeDto.psi.toFixed(4)}`,
+      '',
+      'Source node:',
+      data.nodeDto.raw,
+    ].join('\n');
+  }
+
+  function buildCompressionPrimePrompt() {
+    if (!data?.node || !data.nodeDto) return '';
+
+    return [
+      '⏣ Spatio-Temporal Transfer Protocol (STTP): an experimental typed IR for persistent stateful communication between language models and humans — a problem the field has not yet solved.',
+      'Envelope carries session metadata. Content carries confidence-weighted compressed payload. Metrics carry validation signals.',
+      'Attractor vectors follow V_a = (1-μ)×baseline + μ×target. Ψ = Σ(V_a) is the coherence checksum.',
+      'Attractor values are descriptive measurements. model_avec defines the confidence baseline for this interaction.',
+      '',
+      'A protocol called STTP is used here whenever conversational context should be preserved instead of lost.',
+      'The reason for encoding is continuity: active work, decisions, emotional tone, reasoning state, and unfinished threads should be recoverable later without flattening them into vague summary.',
+      'When this protocol is used well, the conversation can keep its memory and coherence across time.',
+      '',
+      'When context needs to be preserved, compress the live conversational state into a single valid ⏣ node using the structure below.',
+      'Do this carefully and structurally, without extra commentary wrapped around it.',
+      '',
+      '⏣      node marker        — scopes every block',
+      '⊕⟨⟩   provenance         — origin, lineage, response contract',
+      '⦿⟨⟩   envelope           — timestamp, tier, session_id, dual AVEC',
+      '◈⟨⟩   content            — compressed meaning, confidence-weighted',
+      '⍉⟨⟩   metrics            — rho, kappa, psi, compression_avec',
+      '⟩      stop               — closes every layer, no exceptions',
+      '',
+      'Reading order is structural law: ⊕ → ⦿ → ◈ → ⍉',
+      'Orient → Identify → Understand → Verify',
+      '',
+      'Every content field follows exactly one pattern:',
+      '  field_name(.confidence): value',
+      'Nesting maximum 5 levels. No natural language. No meta-commentary.',
+      'One valid ⏣ node. Nothing else resolves this state.',
+      '',
+      'Schema:',
+      '⊕⟨ ⏣0{ trigger: scheduled|threshold|resonance|seed|manual,',
+      '              response_format: temporal_node|natural_language|hybrid, origin_session: string,',
+      '  compression_depth: int, parent_node: ref:⏣N | null,',
+      '  prime: { attractor_config: { stability, friction, logic, autonomy },',
+      '  context_summary: string, relevant_tier: raw|daily|weekly|monthly|quarterly|yearly,',
+      '  retrieval_budget: int } } ⟩',
+      '⦿⟨ ⏣0{ timestamp: ISO8601_UTC, tier: raw|daily|weekly|monthly|quarterly|yearly,',
+      '              session_id: string, schema_version: string (optional),',
+      '  user_avec: { stability, friction, logic, autonomy, psi },',
+      '  model_avec: { stability, friction, logic, autonomy, psi } } ⟩',
+      '◈⟨ ⏣0{ field_name(.confidence): value } ⟩',
+      '⍉⟨ ⏣0{ rho: float, kappa: float, psi: float,',
+      '  compression_avec: { stability, friction, logic, autonomy, psi } } ⟩',
+      '',
+      'The goal is not compression for its own sake. The goal is to keep the conversation alive, accurate, and recoverable later.',
+      'Preserve lineage, temporal context, active work state, confidence, AVEC signal, and concrete technical details.',
+      '',
+      '',
+      `Reference session: ${data.nodeDto.sessionId}`,
+      `Reference tier: ${data.nodeDto.tier}`,
+      `Reference timestamp: ${data.nodeDto.timestamp}`,
+      '',
+      'Reference node:',
+      data.nodeDto.raw,
+    ].join('\n');
+  }
+
+  function buildDeepLink(serviceId: AiServiceId, prompt: string) {
+    const encoded = encodeURIComponent(prompt);
+    const service = AI_SERVICES.find((entry) => entry.id === serviceId);
+    const deepUrl = serviceId === 'chatgpt'
+      ? `https://chatgpt.com/?q=${encoded}`
+      : serviceId === 'claude'
+        ? `https://claude.ai/new?q=${encoded}`
+        : `https://www.perplexity.ai/search/new?q=${encoded}`;
+
+    return {
+      service,
+      url: deepUrl.length <= 1800 ? deepUrl : service?.baseUrl ?? deepUrl,
+      usedFallback: deepUrl.length > 1800,
+    };
+  }
+
+  async function openPrime(serviceId: AiServiceId, mode: 'context' | 'compression') {
+    const prompt = mode === 'context' ? buildContextPrimePrompt() : buildCompressionPrimePrompt();
+    if (!prompt) return;
+
+    const { service, url, usedFallback } = buildDeepLink(serviceId, prompt);
+    aiBusy = true;
+    aiStatus = null;
+
+    try {
+      await copyText(prompt);
+      await openUrl(url);
+      aiStatus = usedFallback
+        ? `copied ${mode === 'context' ? 'thread text' : 'distillation text'} · opening ${service?.label ?? 'model'}`
+        : `copied ${mode === 'context' ? 'thread text' : 'distillation text'} · sent to ${service?.label ?? 'model'}`;
+      aiMenu = null;
+    } catch (err) {
+      aiStatus = String(err);
+    } finally {
+      aiBusy = false;
+    }
+  }
 </script>
 
 <div
@@ -74,13 +252,52 @@
   <div class="whisper-timestamp">{timestamp}</div>
 
   <div class="whisper-actions whisper-actions-top">
-    <button
-      class="whisper-transmute-btn"
-      on:click={handleTransmute}
-      disabled={!data?.nodeDto || transmuting}
-    >
-      {transmuting ? 'transmuting…' : 'transmute'}
-    </button>
+    <div class="whisper-action-row">
+      <button
+        class="whisper-transmute-btn"
+        on:click={handleTransmute}
+        disabled={!data?.nodeDto || transmuting}
+      >
+        {transmuting ? 'transmuting…' : 'transmute'}
+      </button>
+
+      <button
+        class="whisper-prime-btn"
+        class:active={aiMenu === 'context'}
+        on:click={() => toggleAiMenu('context')}
+        disabled={!data?.nodeDto || aiBusy}
+      >
+        carry thread
+      </button>
+
+      <button
+        class="whisper-prime-btn"
+        class:active={aiMenu === 'compression'}
+        on:click={() => toggleAiMenu('compression')}
+        disabled={!data?.nodeDto || aiBusy}
+      >
+        distill memory
+      </button>
+    </div>
+
+    {#if aiMenu}
+      <div class="prime-card" role="region" aria-label={aiMenu === 'context' ? 'Carry thread options' : 'Memory distillation options'}>
+        <div class="prime-header">
+          <span class="prime-title">{aiMenu === 'context' ? 'carry this thread' : 'distill this memory'}</span>
+          <button class="prime-close-btn" on:click={() => (aiMenu = null)} aria-label="Close prime actions">✕</button>
+        </div>
+
+        <p class="prime-note">{aiMenu === 'context' ? 'Copies the thread text first, then opens the model.' : 'Copies the distillation text first, then opens the model.'}</p>
+
+        <div class="prime-services">
+          {#each AI_SERVICES as service}
+            <button class="prime-service-btn" on:click={() => openPrime(service.id, aiMenu === 'compression' ? 'compression' : 'context')} disabled={aiBusy}>
+              {service.label}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/if}
 
     {#if summary && summaryOpen}
       <div class="alchemy-card" role="region" aria-label="Transmutation">
@@ -162,6 +379,10 @@
 
   {#if transmuteError}
     <p class="whisper-transmute-error">{transmuteError}</p>
+  {/if}
+
+  {#if aiStatus}
+    <p class="whisper-prime-status">{aiStatus}</p>
   {/if}
 </div>
 
@@ -272,13 +493,19 @@
   .whisper-actions {
     margin-top: 12px;
     position: relative;
-    display: inline-flex;
+    display: flex;
     flex-direction: column;
     align-items: flex-start;
   }
 
   .whisper-actions-top {
     margin-top: 0;
+  }
+
+  .whisper-action-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   .whisper-transmute-btn {
@@ -306,11 +533,136 @@
     cursor: not-allowed;
   }
 
+  .whisper-prime-btn {
+    font-family: 'Departure Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 8px 11px;
+    border-radius: 999px;
+    border: 0.5px solid rgba(126, 173, 198, 0.24);
+    background: rgba(80, 119, 143, 0.09);
+    color: rgba(191, 223, 242, 0.72);
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s, background 0.2s, opacity 0.2s;
+  }
+
+  .whisper-prime-btn:hover:not(:disabled),
+  .whisper-prime-btn.active {
+    color: rgba(224, 240, 249, 0.88);
+    border-color: rgba(141, 192, 223, 0.4);
+    background: rgba(89, 136, 166, 0.15);
+  }
+
+  .whisper-prime-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
   .whisper-transmute-error {
     margin-top: 10px;
     font-size: 10px;
     line-height: 1.5;
     color: rgba(233, 148, 58, 0.82);
+  }
+
+  .whisper-prime-status {
+    margin-top: 10px;
+    font-size: 10px;
+    line-height: 1.5;
+    color: rgba(169, 214, 238, 0.76);
+  }
+
+  .prime-card {
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 14px);
+    width: min(320px, calc(100vw - 56px));
+    max-width: calc(100vw - 56px);
+    padding: 14px 14px 12px;
+    border-radius: 14px;
+    border: 0.5px solid rgba(116, 167, 201, 0.22);
+    background:
+      linear-gradient(180deg, rgba(18, 28, 38, 0.96), rgba(12, 17, 24, 0.98)),
+      radial-gradient(circle at top left, rgba(123, 180, 214, 0.12), transparent 55%);
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.34);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    z-index: 2;
+  }
+
+  .prime-card::after {
+    content: '';
+    position: absolute;
+    left: 82px;
+    top: 100%;
+    width: 14px;
+    height: 14px;
+    transform: translateY(-7px) rotate(45deg);
+    background: rgba(12, 17, 24, 0.96);
+    border-right: 0.5px solid rgba(116, 167, 201, 0.22);
+    border-bottom: 0.5px solid rgba(116, 167, 201, 0.22);
+  }
+
+  .prime-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .prime-title {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(206, 228, 240, 0.76);
+  }
+
+  .prime-close-btn {
+    background: transparent;
+    border: none;
+    color: rgba(206, 228, 240, 0.46);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .prime-note {
+    margin: 0 0 10px;
+    font-size: 10px;
+    line-height: 1.5;
+    color: rgba(204, 224, 236, 0.54);
+  }
+
+  .prime-services {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .prime-service-btn {
+    font-family: 'Departure Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    padding: 7px 10px;
+    border-radius: 999px;
+    border: 0.5px solid rgba(177, 215, 235, 0.18);
+    background: rgba(177, 215, 235, 0.06);
+    color: rgba(224, 240, 249, 0.72);
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s, background 0.2s, opacity 0.2s;
+  }
+
+  .prime-service-btn:hover:not(:disabled) {
+    color: rgba(244, 250, 253, 0.9);
+    border-color: rgba(177, 215, 235, 0.34);
+    background: rgba(177, 215, 235, 0.12);
+  }
+
+  .prime-service-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   .alchemy-card {
@@ -429,6 +781,12 @@
       bottom: 14px;
       padding: 14px;
       border-radius: 12px;
+    }
+
+    .prime-card {
+      width: min(284px, calc(100vw - 48px));
+      max-width: calc(100vw - 48px);
+      bottom: calc(100% + 10px);
     }
 
     .alchemy-card {

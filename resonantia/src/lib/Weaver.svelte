@@ -1908,9 +1908,26 @@
         <span class="drawer-title">settings</span>
         <button class="close-btn" on:click={() => (settingsOpen = false)}>✕</button>
       </div>
-      <input class="drawer-input" type="text" placeholder="gateway base url" bind:value={gatewayBaseUrl} disabled={settingsLoading || settingsSaving} />
-      <input class="drawer-input" type="text" placeholder="ollama base url" bind:value={ollamaBaseUrl} disabled={settingsLoading || settingsSaving} />
-      <input class="drawer-input" type="text" placeholder="ollama model" bind:value={ollamaModel} disabled={settingsLoading || settingsSaving} />
+      <p class="settings-intro">Set the endpoints Resonantia uses for graph retrieval, storage, and model work.</p>
+
+      <label class="settings-field">
+        <span class="settings-label">gateway base url</span>
+        <span class="settings-note">STTP graph, nodes, calibration, and storage</span>
+        <input class="drawer-input" type="text" placeholder="http://10.12.0.11:8090" bind:value={gatewayBaseUrl} disabled={settingsLoading || settingsSaving} />
+      </label>
+
+      <label class="settings-field">
+        <span class="settings-label">ollama base url</span>
+        <span class="settings-note">Local model endpoint for transmutation and summaries</span>
+        <input class="drawer-input" type="text" placeholder="http://127.0.0.1:11434" bind:value={ollamaBaseUrl} disabled={settingsLoading || settingsSaving} />
+      </label>
+
+      <label class="settings-field">
+        <span class="settings-label">ollama model</span>
+        <span class="settings-note">Model name Resonantia should call by default</span>
+        <input class="drawer-input" type="text" placeholder="llama3.2" bind:value={ollamaModel} disabled={settingsLoading || settingsSaving} />
+      </label>
+
       {#if settingsLoading}<p class="drawer-success">loading config…</p>{/if}
       {#if settingsError}<p class="drawer-error">{settingsError}</p>{/if}
       {#if settingsSaved}<p class="drawer-success">settings saved</p>{/if}
@@ -2172,6 +2189,37 @@
     transition: border-color 0.2s;
   }
   .drawer-textarea:focus { border-color: rgba(255, 255, 255, 0.25); }
+
+  .settings-intro {
+    margin: 0 0 14px;
+    font-size: 10px;
+    line-height: 1.55;
+    color: rgba(255, 255, 255, 0.48);
+  }
+
+  .settings-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 12px;
+  }
+
+  .settings-label {
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.42);
+  }
+
+  .settings-note {
+    font-size: 10px;
+    line-height: 1.45;
+    color: rgba(255, 255, 255, 0.3);
+  }
+
+  .settings-field .drawer-input {
+    margin-bottom: 0;
+  }
 
   .slider-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
   .slider-label { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; width: 72px; flex-shrink: 0; }
