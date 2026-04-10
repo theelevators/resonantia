@@ -618,6 +618,153 @@
       margin-top: 80px;
     }
 
+    /* ── ACCESS MODAL ── */
+    .access-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 140;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(5, 7, 10, 0.72);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.24s ease;
+    }
+
+    .access-modal.open {
+      opacity: 1;
+      pointer-events: all;
+    }
+
+    .access-panel {
+      width: min(420px, calc(100vw - 32px));
+      border-radius: 16px;
+      border: 0.5px solid rgba(255,255,255,0.12);
+      background:
+        radial-gradient(circle at top left, rgba(91,155,213,0.09), transparent 38%),
+        linear-gradient(180deg, rgba(15,17,23,0.97), rgba(10,12,16,0.98));
+      box-shadow: 0 28px 64px rgba(0,0,0,0.36);
+      padding: 24px;
+    }
+
+    .access-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .access-title {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-weight: 300;
+      font-size: clamp(24px, 4vw, 32px);
+      line-height: 1.1;
+      color: rgba(255,255,255,0.84);
+    }
+
+    .access-close {
+      border: none;
+      background: transparent;
+      color: rgba(255,255,255,0.32);
+      font-size: 16px;
+      cursor: pointer;
+      line-height: 1;
+      transition: color 0.2s ease;
+    }
+
+    .access-close:hover {
+      color: rgba(255,255,255,0.72);
+    }
+
+    .access-copy {
+      margin-bottom: 18px;
+      font-size: 12px;
+      line-height: 1.7;
+      color: rgba(255,255,255,0.45);
+    }
+
+    .access-form {
+      display: grid;
+      gap: 12px;
+    }
+
+    .access-field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .access-label {
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.36);
+    }
+
+    .access-input {
+      width: 100%;
+      border: 0.5px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.04);
+      color: rgba(255,255,255,0.82);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 12px 13px;
+      outline: none;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+
+    .access-input:focus {
+      border-color: rgba(91,155,213,0.34);
+      background: rgba(255,255,255,0.06);
+    }
+
+    .access-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .access-btn {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      border-radius: 999px;
+      padding: 11px 16px;
+      cursor: pointer;
+      transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+    }
+
+    .access-btn.cancel {
+      border: 0.5px solid rgba(255,255,255,0.12);
+      background: transparent;
+      color: rgba(255,255,255,0.46);
+    }
+
+    .access-btn.cancel:hover {
+      border-color: rgba(255,255,255,0.22);
+      color: rgba(255,255,255,0.76);
+    }
+
+    .access-btn.submit {
+      border: 0.5px solid rgba(91,155,213,0.26);
+      background: rgba(91,155,213,0.11);
+      color: rgba(224,238,252,0.78);
+    }
+
+    .access-btn.submit:hover {
+      border-color: rgba(91,155,213,0.4);
+      background: rgba(91,155,213,0.18);
+      color: rgba(244,248,252,0.92);
+    }
+
     /* ── NAV ── */
     nav {
       position: fixed;
@@ -1001,9 +1148,33 @@
     ⏣ Spatio-Temporal Transfer Protocol.
     Your mind, made navigable.
   </p>
-  <a href="#" class="enter-btn">request access</a>
+  <button class="enter-btn" id="request-access-trigger" type="button">request access</button>
   <p class="footer-domain">resonantia.me</p>
 </section>
+
+<div class="access-modal" id="access-modal" aria-hidden="true">
+  <div class="access-panel" role="dialog" aria-modal="true" aria-labelledby="access-title">
+    <div class="access-header">
+      <h3 class="access-title" id="access-title">Request access</h3>
+      <button class="access-close" id="access-close" type="button" aria-label="Close request access">✕</button>
+    </div>
+    <p class="access-copy">Leave your name and email and Resonantia will open a ready-to-send note to Keryx Labs.</p>
+    <form class="access-form" id="access-form">
+      <label class="access-field">
+        <span class="access-label">name</span>
+        <input class="access-input" id="access-name" name="name" type="text" autocomplete="name" required />
+      </label>
+      <label class="access-field">
+        <span class="access-label">email</span>
+        <input class="access-input" id="access-email" name="email" type="email" autocomplete="email" required />
+      </label>
+      <div class="access-actions">
+        <button class="access-btn cancel" id="access-cancel" type="button">cancel</button>
+        <button class="access-btn submit" type="submit">send request</button>
+      </div>
+    </form>
+  </div>
+</div>
 
 <script>
 const constellationCanvas = document.getElementById('constellation');
@@ -1373,6 +1544,61 @@ const mObserver = new IntersectionObserver(entries => {
   });
 }, { threshold: 0.5 });
 mObserver.observe(manifestoQ);
+
+const accessTrigger = document.getElementById('request-access-trigger');
+const accessModal = document.getElementById('access-modal');
+const accessClose = document.getElementById('access-close');
+const accessCancel = document.getElementById('access-cancel');
+const accessForm = document.getElementById('access-form');
+const accessName = document.getElementById('access-name');
+const accessEmail = document.getElementById('access-email');
+
+function openAccessModal() {
+  accessModal.classList.add('open');
+  accessModal.setAttribute('aria-hidden', 'false');
+  requestAnimationFrame(() => accessName.focus());
+}
+
+function closeAccessModal() {
+  accessModal.classList.remove('open');
+  accessModal.setAttribute('aria-hidden', 'true');
+}
+
+accessTrigger.addEventListener('click', openAccessModal);
+accessClose.addEventListener('click', closeAccessModal);
+accessCancel.addEventListener('click', closeAccessModal);
+
+accessModal.addEventListener('click', (event) => {
+  if (event.target === accessModal) closeAccessModal();
+});
+
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && accessModal.classList.contains('open')) {
+    closeAccessModal();
+  }
+});
+
+accessForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+
+  const name = accessName.value.trim();
+  const email = accessEmail.value.trim();
+  if (!name || !email) return;
+
+  const subject = encodeURIComponent('Resonantia access request');
+  const body = encodeURIComponent([
+    'Hi Keryx Labs,',
+    '',
+    'I would like to request access to Resonantia.',
+    '',
+    `Name: ${name}`,
+    `Email: ${email}`,
+  ].join('\n'));
+
+  window.location.href = `mailto:keryxlabs@gmail.com?subject=${subject}&body=${body}`;
+  closeAccessModal();
+  accessForm.reset();
+});
 </script>
 </body>
 </html>
