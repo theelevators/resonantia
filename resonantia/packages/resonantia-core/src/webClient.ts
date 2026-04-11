@@ -319,6 +319,32 @@ function writeConfigToLocalStorage(config: AppConfig): void {
   }
 }
 
+function defaultConfig(): AppConfig {
+  return {
+    gatewayBaseUrl: DEFAULT_GATEWAY_BASE_URL,
+    ollamaBaseUrl: DEFAULT_OLLAMA_BASE_URL,
+    ollamaModel: DEFAULT_OLLAMA_MODEL,
+    layoutOverrides: {
+      sessionOverrides: {},
+      nodeOverrides: {},
+    },
+  };
+}
+
+async function readConfigBestEffort(): Promise<{ config: AppConfig; db: Surreal | null }> {
+  try {
+    const db = await getDb();
+    const config = await readConfig(db);
+    return { config, db };
+  } catch {
+    const cached = readConfigFromLocalStorage();
+    return {
+      config: cached ?? defaultConfig(),
+      db: null,
+    };
+  }
+}
+
 function toGatewayRequestUrls(url: string): string[] {
   if (typeof window === "undefined") {
     return [url];
@@ -727,6 +753,20 @@ async function upsertLocalNode(db: Surreal, node: NodeDto): Promise<void> {
   await upsertAny(db, recordIdForNode(normalized.syncKey), normalized);
 }
 
+async function hydrateLocalCacheFromRemote(db: Surreal | null, nodes: NodeDto[]): Promise<void> {
+  if (!db || nodes.length === 0) {
+    return;
+  }
+
+  for (const node of nodes) {
+    try {
+      await upsertLocalNode(db, node);
+    } catch {
+      // Ignore local cache hydration failures; rendering can still continue from remote data.
+    }
+  }
+}
+
 function byTimestampDesc(left: NodeDto, right: NodeDto): number {
   return right.timestamp.localeCompare(left.timestamp);
 }
@@ -1086,23 +1126,57 @@ export function createWebResonantiaClient(): ResonantiaClient {
     },
 
     async getConfig(): Promise<AppConfig> {
-      const db = await getDb();
-      return readConfig(db);
+      const result = await readConfigBestEffort();
+      return result.config;
     },
 
     async listNodes(limit: number, sessionId?: string): Promise<{ nodes: NodeDto[]; retrieved: number }> {
-      const db = await getDb();
       const cappedLimit = clamp(Math.trunc(limit), 1, 400);
       const sessionFilter = sessionId?.trim();
 
-      const nodes = (await readAllNodes(db))
-        .filter((node) => !sessionFilter || node.sessionId === sessionFilter)
-        .sort(byTimestampDesc)
-        .slice(0, cappedLimit);
+      let db: Surreal | null = null;
+      let localNodes: NodeDto[] = [];
+      let localError: unknown = null;
+
+      try {
+        db = await getDb();
+        localNodes = (await readAllNodes(db))
+          .filter((node) => !sessionFilter || node.sessionId === sessionFilter)
+          .sort(byTimestampDesc);
+      } catch (error) {
+        localError = error;
+      }
+
+      if (localNodes.length > 0) {
+        return {
+          nodes: localNodes.slice(0, cappedLimit),
+          retrieved: Math.min(localNodes.length, cappedLimit),
+        };
+      }
+
+      const cachedConfig = readConfigFromLocalStorage();
+      const fallbackGateway = normalizeGatewayBaseUrl(cachedConfig?.gatewayBaseUrl ?? "");
+
+      if (fallbackGateway) {
+        const remoteNodes = (await fetchGatewayNodes(fallbackGateway, sessionFilter))
+          .sort(byTimestampDesc)
+          .slice(0, cappedLimit);
+
+        await hydrateLocalCacheFromRemote(db, remoteNodes);
+
+        return {
+          nodes: remoteNodes,
+          retrieved: remoteNodes.length,
+        };
+      }
+
+      if (localError) {
+        throw localError;
+      }
 
       return {
-        nodes,
-        retrieved: nodes.length,
+        nodes: [],
+        retrieved: 0,
       };
     },
 
@@ -1316,26 +1390,30 @@ export function createWebResonantiaClient(): ResonantiaClient {
     },
 
     async setOllamaConfig(baseUrl?: string, model?: string): Promise<void> {
-      const db = await getDb();
-      const current = await readConfig(db);
+      const { config: current, db } = await readConfigBestEffort();
       const next: AppConfig = {
         ...current,
         ollamaBaseUrl: baseUrl ?? current.ollamaBaseUrl,
         ollamaModel: model ?? current.ollamaModel,
       };
 
-      await writeConfig(db, next);
+      writeConfigToLocalStorage(normalizeConfig(next));
+      if (db) {
+        await writeConfig(db, next);
+      }
     },
 
     async setGatewayBaseUrl(baseUrl: string): Promise<void> {
-      const db = await getDb();
-      const current = await readConfig(db);
+      const { config: current, db } = await readConfigBestEffort();
       const next: AppConfig = {
         ...current,
         gatewayBaseUrl: normalizeGatewayBaseUrl(baseUrl),
       };
 
-      await writeConfig(db, next);
+      writeConfigToLocalStorage(normalizeConfig(next));
+      if (db) {
+        await writeConfig(db, next);
+      }
     },
   };
 }
