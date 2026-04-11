@@ -4944,6 +4944,16 @@ dependencies = [
 name = "resonantia"
 version = "0.1.0"
 dependencies = [
+ "resonantia-core",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+]
+
+[[package]]
+name = "resonantia-core"
+version = "0.1.0"
+dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
@@ -4955,9 +4965,6 @@ dependencies = [
  "sha2",
  "sttp-core-rs",
  "surrealdb",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
  "tokio",
 ]
 

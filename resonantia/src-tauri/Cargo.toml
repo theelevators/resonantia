@@ -20,15 +20,4 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-regex = "1"
-sha2 = "0.10"
-hex = "0.4"
-sttp-core-rs = "0.1.2"
-surrealdb = { version = "3", default-features = false, features = ["protocol-http", "protocol-ws", "kv-surrealkv", "rustls", "kv-mem"] }
-async-trait = "0.1"
-anyhow = "1"
-chrono = { version = "0.4", features = ["serde"] }
+resonantia-core = { path = "resonantia-core" }
