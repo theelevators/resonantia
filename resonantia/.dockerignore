@@ -1,0 +1,21 @@
+# Dependencies
+node_modules
+
+# Build outputs
+build
+.svelte-kit
+
+# VCS / editor
+.git
+.vscode
+
+# Local runtime artifacts
+npm-debug.log*
+*.log
+
+# Tauri build artifacts (large, not needed for web image)
+src-tauri/target
+
+# Media and docs not required in container
+resonantia-demo.mp4
+weaver-context-summary.md

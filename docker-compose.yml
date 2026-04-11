@@ -1,0 +1,10 @@
+services:
+  resonantia-web:
+    build:
+      context: ./resonantia
+      dockerfile: Dockerfile
+    image: resonantia-web:latest
+    container_name: resonantia-web
+    restart: unless-stopped
+    ports:
+      - "${RESONANTIA_PORT:-4173}:4173"
