@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { openUrl } from '@tauri-apps/plugin-opener';
   import { avecColor, avecToRgb, shortLabel, AVEC_HEX, AVEC_COLORS, formatTimestamp } from '@resonantia/core';
   import CollapseCard from '@resonantia/ui/components/CollapseCard.svelte';
   import { resonantiaClient } from './resonantiaClient';
@@ -778,13 +777,18 @@
 
   async function openExternalUrl(url: string) {
     try {
-      await openUrl(url);
-      return;
-    } catch {
-      if (typeof window !== 'undefined') {
-        window.open(url, '_blank', 'noopener,noreferrer');
+      if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+        const opener = await import('@tauri-apps/plugin-opener');
+        await opener.openUrl(url);
         return;
       }
+    } catch {
+      // Fall through to browser navigation fallback.
+    }
+
+    if (typeof window !== 'undefined') {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
     }
 
     throw new Error('Unable to open external URL in this runtime.');

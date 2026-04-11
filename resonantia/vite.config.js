@@ -4,32 +4,196 @@ import { sveltekit } from "@sveltejs/kit/vite";
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
-// https://vite.dev/config/
-export default defineConfig(async () => ({
-  plugins: [sveltekit()],
+/**
+ * @param {unknown} chunk
+ * @returns {Uint8Array}
+ */
+function toUint8Array(chunk) {
+  if (chunk instanceof Uint8Array) {
+    return chunk;
+  }
 
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent Vite from obscuring rust errors
-  clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
-  server: {
-    port: 1420,
-    strictPort: true,
-    host: host || "127.0.0.1",
-    fs: {
-      allow: [".", "./packages"],
-    },
-    hmr: host
-      ? {
-          protocol: "ws",
-          host,
-          port: 1421,
+  if (typeof chunk === "string") {
+    return new TextEncoder().encode(chunk);
+  }
+
+  return new TextEncoder().encode(String(chunk));
+}
+
+/**
+ * @param {any} req
+ * @returns {Promise<Uint8Array | undefined>}
+ */
+function readRequestBody(req) {
+  return new Promise((resolve, reject) => {
+    /** @type {Uint8Array[]} */
+    const chunks = [];
+
+    req.on(
+      "data",
+      /** @param {unknown} chunk */ (chunk) => {
+      chunks.push(toUint8Array(chunk));
+      },
+    );
+
+    req.on("end", () => {
+      if (chunks.length === 0) {
+        resolve(undefined);
+        return;
+      }
+
+      let totalLength = 0;
+      for (const chunk of chunks) {
+        totalLength += chunk.byteLength;
+      }
+
+      const payload = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        payload.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+
+      resolve(payload);
+    });
+
+    req.on("error", reject);
+  });
+}
+
+/** @returns {import("vite").Plugin} */
+function devGatewayProxyPlugin() {
+  /** @param {import("vite").ViteDevServer | any} server */
+  const attachProxyMiddleware = (server) => {
+    /** @type {(req: any, res: any) => Promise<void>} */
+    const handler = async (req, res) => {
+      const inbound = /** @type {any} */ (req);
+      const outbound = /** @type {any} */ (res);
+      const requestUrl = new URL(inbound.url ?? "", "http://localhost");
+      const target = requestUrl.searchParams.get("target");
+
+      if (!target) {
+        outbound.statusCode = 400;
+        outbound.setHeader("Content-Type", "text/plain; charset=utf-8");
+        outbound.end("gateway proxy requires a target query parameter");
+        return;
+      }
+
+      /** @type {URL} */
+      let destination;
+      try {
+        destination = new URL(target);
+      } catch {
+        outbound.statusCode = 400;
+        outbound.setHeader("Content-Type", "text/plain; charset=utf-8");
+        outbound.end("gateway proxy target must be an absolute URL");
+        return;
+      }
+
+      if (destination.protocol !== "http:" && destination.protocol !== "https:") {
+        outbound.statusCode = 400;
+        outbound.setHeader("Content-Type", "text/plain; charset=utf-8");
+        outbound.end("gateway proxy target must use http or https");
+        return;
+      }
+
+      const method = (inbound.method ?? "GET").toUpperCase();
+      const hasBody = method !== "GET" && method !== "HEAD";
+
+      try {
+        const body = hasBody ? await readRequestBody(inbound) : undefined;
+        const headers = new Headers();
+
+        for (const [name, value] of Object.entries(inbound.headers ?? {})) {
+          if (!value) {
+            continue;
+          }
+
+          const key = name.toLowerCase();
+          if (key === "host" || key === "origin" || key === "referer" || key === "connection" || key === "content-length") {
+            continue;
+          }
+
+          headers.set(name, Array.isArray(value) ? value.join(", ") : value);
         }
-      : undefined,
-    watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+
+        const upstream = await fetch(destination.toString(), {
+          method,
+          headers,
+          body,
+          redirect: "manual",
+        });
+
+        outbound.statusCode = upstream.status;
+        upstream.headers.forEach((value, name) => {
+          const key = name.toLowerCase();
+          if (key === "transfer-encoding" || key === "connection" || key === "content-encoding") {
+            return;
+          }
+
+          outbound.setHeader(name, value);
+        });
+
+        const payload = new Uint8Array(await upstream.arrayBuffer());
+        outbound.end(payload);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        outbound.statusCode = 502;
+        outbound.setHeader("Content-Type", "text/plain; charset=utf-8");
+        outbound.end(`gateway proxy failed: ${message}`);
+      }
+    };
+
+    server.middlewares.use("/__gateway_proxy__", handler);
+  };
+
+  return {
+    name: "resonantia-dev-gateway-proxy",
+    /** @param {import("vite").ViteDevServer} server */
+    configureServer(server) {
+      attachProxyMiddleware(server);
     },
-  },
-}));
+    /** @param {any} server */
+    configurePreviewServer(server) {
+      attachProxyMiddleware(server);
+    },
+  };
+}
+
+// https://vite.dev/config/
+export default defineConfig(async () => {
+  const sveltePlugins = await sveltekit();
+  const normalizedSveltePlugins = Array.isArray(sveltePlugins) ? sveltePlugins : [sveltePlugins];
+
+  return {
+    plugins: [devGatewayProxyPlugin(), ...normalizedSveltePlugins],
+    optimizeDeps: {
+      exclude: ["@surrealdb/wasm"],
+    },
+
+    // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
+    //
+    // 1. prevent Vite from obscuring rust errors
+    clearScreen: false,
+    // 2. tauri expects a fixed port, fail if that port is not available
+    server: {
+      port: 1420,
+      strictPort: true,
+      host: host || "127.0.0.1",
+      fs: {
+        allow: [".", "./packages"],
+      },
+      hmr: host
+        ? {
+            protocol: "ws",
+            host,
+            port: 1421,
+          }
+        : undefined,
+      watch: {
+        // 3. tell Vite to ignore watching `src-tauri`
+        ignored: ["**/src-tauri/**"],
+      },
+    },
+  };
+});

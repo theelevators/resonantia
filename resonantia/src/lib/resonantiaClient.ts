@@ -1,7 +1,49 @@
-import { invoke } from "@tauri-apps/api/core";
-import { createResonantiaClient } from "@resonantia/core";
+import {
+  createResonantiaClient,
+  createWebResonantiaClient,
+  type ResonantiaClient,
+} from "@resonantia/core";
 
-const invokeCommand = <T>(command: string, args?: Record<string, unknown>) =>
-  invoke<T>(command, args ?? {});
+declare global {
+  interface Window {
+    __TAURI__?: unknown;
+    __TAURI_INTERNALS__?: unknown;
+  }
+}
 
-export const resonantiaClient = createResonantiaClient(invokeCommand);
+function isTauriRuntime(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
+}
+
+async function resolveClient(): Promise<ResonantiaClient> {
+  if (isTauriRuntime()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return createResonantiaClient((command, args) => invoke(command, args ?? {}));
+  }
+
+  return createWebResonantiaClient();
+}
+
+const clientPromise = resolveClient();
+
+function withClient<T>(handler: (client: ResonantiaClient) => Promise<T>): Promise<T> {
+  return clientPromise.then(handler);
+}
+
+export const resonantiaClient: ResonantiaClient = {
+  getHealth: () => withClient((client) => client.getHealth()),
+  getConfig: () => withClient((client) => client.getConfig()),
+  listNodes: (limit, sessionId) => withClient((client) => client.listNodes(limit, sessionId)),
+  getGraph: (limit, sessionId) => withClient((client) => client.getGraph(limit, sessionId)),
+  storeContext: (input) => withClient((client) => client.storeContext(input)),
+  syncPull: (request) => withClient((client) => client.syncPull(request)),
+  syncNow: (request) => withClient((client) => client.syncNow(request)),
+  calibrateSession: (input) => withClient((client) => client.calibrateSession(input)),
+  summarizeNode: (rawNode) => withClient((client) => client.summarizeNode(rawNode)),
+  setOllamaConfig: (baseUrl, model) => withClient((client) => client.setOllamaConfig(baseUrl, model)),
+  setGatewayBaseUrl: (baseUrl) => withClient((client) => client.setGatewayBaseUrl(baseUrl)),
+};
