@@ -4,6 +4,15 @@ import { sveltekit } from "@sveltejs/kit/vite";
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
+const defaultAllowedHosts = ["localhost", "127.0.0.1", "resonantia.levare.cloud"];
+/** @type {string[]} */
+// @ts-expect-error process is a nodejs global
+const envAllowedHosts = (process.env.VITE_ALLOWED_HOSTS ?? "")
+  .split(",")
+  .map((/** @type {string} */ value) => value.trim())
+  .filter((/** @type {string} */ value) => value.length > 0);
+const allowedHosts = Array.from(new Set([...defaultAllowedHosts, ...envAllowedHosts]));
+
 /**
  * @param {unknown} chunk
  * @returns {Uint8Array}
@@ -180,6 +189,7 @@ export default defineConfig(async () => {
       port: 1420,
       strictPort: true,
       host: host || "127.0.0.1",
+      allowedHosts,
       fs: {
         allow: [".", "./packages"],
       },
@@ -194,6 +204,9 @@ export default defineConfig(async () => {
         // 3. tell Vite to ignore watching `src-tauri`
         ignored: ["**/src-tauri/**"],
       },
+    },
+    preview: {
+      allowedHosts,
     },
   };
 });

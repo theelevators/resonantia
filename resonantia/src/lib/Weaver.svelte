@@ -2603,6 +2603,10 @@
 
 <style>
   .weaver-root {
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
     position: fixed;
     inset: 0;
     width: 100vw;
@@ -2626,12 +2630,12 @@
 
   .navbar {
     position: absolute;
-    top: 0; left: 0; right: 0;
+    top: var(--safe-top); left: 0; right: 0;
     height: 46px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 22px;
+    padding: 0 calc(22px + var(--safe-right)) 0 calc(22px + var(--safe-left));
     background: linear-gradient(to bottom, rgba(10,11,14,0.88) 0%, transparent 100%);
     z-index: 10;
     pointer-events: none;
@@ -2982,7 +2986,8 @@
 
   .compose-btn {
     position: absolute;
-    bottom: 24px; right: 24px;
+    bottom: max(24px, calc(var(--safe-bottom) + 12px));
+    right: max(24px, calc(var(--safe-right) + 12px));
     font-family: 'Departure Mono', monospace;
     font-size: 11px;
     letter-spacing: 0.1em;
@@ -3011,8 +3016,8 @@
 
   .telescope-shell {
     position: absolute;
-    left: 20px;
-    bottom: 20px;
+    left: max(20px, calc(var(--safe-left) + 12px));
+    bottom: max(20px, calc(var(--safe-bottom) + 12px));
     z-index: 16;
     pointer-events: none;
   }
@@ -3602,8 +3607,8 @@
 
   @media (max-width: 520px) {
     .telescope-shell {
-      left: 12px;
-      bottom: 12px;
+      left: max(12px, calc(var(--safe-left) + 10px));
+      bottom: max(12px, calc(var(--safe-bottom) + 10px));
     }
 
     .telescope-stage {
@@ -3621,8 +3626,8 @@
     }
 
     .drawer {
-      top: 56px;
-      bottom: 74px;
+      top: calc(var(--safe-top) + 56px);
+      bottom: max(74px, calc(var(--safe-bottom) + 58px));
       width: calc(100vw - 20px);
       max-height: calc(100dvh - 130px);
       padding: 16px;
