@@ -807,7 +807,7 @@
   }
 
   function drawEdges() {
-    if (!graph || level > 0) return;
+    if (telescopeCameraEngaged || !graph || level > 0) return;
     const graphData = graph;
     graphData.edges.forEach(e => {
       const sourceSession = graphData.sessions.find(session => session.id === e.source);
@@ -854,7 +854,7 @@
   }
 
   function drawSessions() {
-    if (!graph) return;
+    if (telescopeCameraEngaged || !graph) return;
 
     graph.sessions.forEach(s => {
       const sp      = sessionRenderPos(s);
@@ -906,7 +906,7 @@
   }
 
   function drawWaveBoundary() {
-    if (level !== 1 || !selectedSession) return;
+    if (telescopeCameraEngaged || level !== 1 || !selectedSession) return;
     const sp = sessionPos[selectedSession.id];
     if (!sp) return;
     const av = sessionAvec(selectedSession);
@@ -932,7 +932,7 @@
   }
 
   function drawWaveThreads() {
-    if (level !== 1 || !selectedSession || !graph) return;
+    if (telescopeCameraEngaged || level !== 1 || !selectedSession || !graph) return;
     const session = selectedSession;
     const sp = sessionPos[session.id];
     if (!sp) return;
@@ -992,7 +992,7 @@
   }
 
   function drawNodes() {
-    if (!graph || level < 1 || !selectedSession) return;
+    if (telescopeCameraEngaged || !graph || level < 1 || !selectedSession) return;
     const sessionNodes = graph.nodes.filter(n => sessionKey(n.sessionId) === sessionKey(selectedSession!.id));
 
     sessionNodes.forEach(n => {
@@ -1038,7 +1038,7 @@
   }
 
   function drawWaveLabels() {
-    if (level !== 1 || !graph || !selectedSession) return;
+    if (telescopeCameraEngaged || level !== 1 || !graph || !selectedSession) return;
     const session = selectedSession;
     const sp = sessionPos[session.id];
     if (!sp) return;
@@ -1230,7 +1230,7 @@
   }
 
   function drawHints() {
-    if (loading) return;
+    if (loading || telescopeCameraEngaged) return;
     ctx.textAlign = 'center';
     ctx.font      = `10px ${FONT_MONO}`;
     const fade = 0.12 + Math.sin(t * 0.7) * 0.06;
@@ -1253,6 +1253,7 @@
     camX     += (targetCamX     - camX)     * LERP;
     camY     += (targetCamY     - camY)     * LERP;
     camScale += (targetCamScale - camScale) * LERP;
+    settleTelescopeTransition();
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1310,7 +1311,14 @@
     canvas.height = Math.round(h * deviceScale);
     ctx?.setTransform(deviceScale, 0, 0, deviceScale, 0, 0);
     layoutConstellation();
-    if (level === 0) {
+    if (telescopePhase === 'entering' && telescopeCameraBefore) {
+      const focus = telescopeFocusTargetFrom(telescopeCameraBefore, level);
+      targetCamX = focus.x;
+      targetCamY = focus.y;
+      targetCamScale = focus.scale;
+    }
+
+    if (!telescopeCameraEngaged && level === 0) {
       camX = targetCamX = W() / 2;
       camY = targetCamY = H() / 2;
       camScale = targetCamScale = CONSTELLATION_SCALE;
@@ -1319,7 +1327,7 @@
 
   // ── Pointer events ─────────────────────────────────────────────
   function onPointerDown(e: MouseEvent) {
-    if (telescopeOpen || level !== 0) return;
+    if (telescopeCameraEngaged || level !== 0) return;
     dragging    = true;
     didDrag     = false;
     dragStart   = { x: e.clientX, y: e.clientY };
@@ -1327,7 +1335,7 @@
   }
 
   function onPointerMove(e: MouseEvent) {
-    if (!dragging || level !== 0) return;
+    if (telescopeCameraEngaged || !dragging || level !== 0) return;
     const dx = e.clientX - dragStart.x;
     const dy = e.clientY - dragStart.y;
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didDrag = true;
@@ -1337,7 +1345,7 @@
 
   function onPointerUp(e: MouseEvent) {
     dragging = false;
-    if (telescopeOpen) return;
+    if (telescopeCameraEngaged) return;
     if (didDrag) return;
 
     const { x: sx, y: sy } = canvasXY(e);
@@ -1466,8 +1474,14 @@
 
   const TELESCOPE_DIAL_MAX = 95;
   const TELESCOPE_DIAL_STEP = 20;
-  const TELESCOPE_TIMELINE_LIMIT = 10;
   const DAY_MS = 24 * 60 * 60 * 1000;
+  const TELESCOPE_CONSTELLATION_SCALE = 1.04;
+  const TELESCOPE_WAVE_SCALE = 2.05;
+  const TELESCOPE_CAMERA_POS_EPSILON = 1.5;
+  const TELESCOPE_CAMERA_SCALE_EPSILON = 0.035;
+
+  type TelescopePhase = 'idle' | 'entering' | 'exiting';
+  type CameraState = { x: number; y: number; scale: number };
 
   let telescopeOpen = false;
   let telescopeDialPct = 0;
@@ -1477,6 +1491,11 @@
   let telescopeRangeLabel = TELESCOPE_RANGES[0].label;
   let telescopeDialOffsetY = 0;
   let telescopeTimelineSessions: GraphSessionDto[] = [];
+  let telescopePhase: TelescopePhase = 'idle';
+  let telescopeCameraBefore: CameraState | null = null;
+
+  $: telescopeCanAccess = level === 0 || level === 1;
+  $: telescopeCameraEngaged = telescopeOpen || telescopePhase !== 'idle';
 
   function clearSyncDetailTimer() {
     if (syncDetailTimer !== null) {
@@ -1587,20 +1606,109 @@
     return fieldAvecColor(sessionAvec(session), alpha);
   }
 
+  function cameraAtTarget(positionEpsilon = TELESCOPE_CAMERA_POS_EPSILON, scaleEpsilon = TELESCOPE_CAMERA_SCALE_EPSILON) {
+    return Math.hypot(targetCamX - camX, targetCamY - camY) <= positionEpsilon
+      && Math.abs(targetCamScale - camScale) <= scaleEpsilon;
+  }
+
+  function telescopeAnchorScreenPoint() {
+    const compact = W() <= 520;
+    return {
+      x: W() / 2,
+      y: H() / 2 + (compact ? 10 : 16),
+    };
+  }
+
+  function worldAtScreenForCamera(screenX: number, screenY: number, camera: CameraState) {
+    return {
+      x: (screenX - W() / 2) / camera.scale + camera.x,
+      y: (screenY - H() / 2) / camera.scale + camera.y,
+    };
+  }
+
+  function telescopeFocusScaleFor(levelValue: number, cameraScale: number) {
+    if (levelValue === 1) {
+      // Entering telescope from wave should pull back for context, not punch in.
+      return Math.max(1.82, Math.min(TELESCOPE_WAVE_SCALE, cameraScale * 0.72));
+    }
+
+    // In constellation, use a subtle pull-back so the telescope stage feels cinematic.
+    return Math.max(0.92, Math.min(TELESCOPE_CONSTELLATION_SCALE, cameraScale * 0.86));
+  }
+
+  function telescopeFocusTargetFrom(camera: CameraState, levelValue: number) {
+    const anchor = telescopeAnchorScreenPoint();
+    const world = worldAtScreenForCamera(anchor.x, anchor.y, camera);
+    const scale = telescopeFocusScaleFor(levelValue, camera.scale);
+    return {
+      x: world.x,
+      y: world.y,
+      scale,
+    };
+  }
+
+  function beginTelescopeEnterTransition() {
+    const startCamera = { x: camX, y: camY, scale: camScale };
+    telescopeCameraBefore = startCamera;
+    const focus = telescopeFocusTargetFrom(startCamera, level);
+    targetCamX = focus.x;
+    targetCamY = focus.y;
+    targetCamScale = focus.scale;
+    telescopePhase = 'entering';
+  }
+
+  function beginTelescopeExitTransition() {
+    telescopeOpen = false;
+    telescopeDragY = null;
+
+    if (!telescopeCameraBefore) {
+      telescopePhase = 'idle';
+      return;
+    }
+
+    targetCamX = telescopeCameraBefore.x;
+    targetCamY = telescopeCameraBefore.y;
+    targetCamScale = telescopeCameraBefore.scale;
+    telescopePhase = 'exiting';
+  }
+
+  function settleTelescopeTransition() {
+    if (telescopePhase === 'entering' && cameraAtTarget()) {
+      telescopePhase = 'idle';
+      telescopeOpen = true;
+      return;
+    }
+
+    if (telescopePhase === 'exiting' && cameraAtTarget()) {
+      telescopePhase = 'idle';
+      telescopeCameraBefore = null;
+    }
+  }
+
   function openTelescope() {
+    if (!telescopeCanAccess || telescopeCameraEngaged) {
+      return;
+    }
+
     closeTransientUi();
     syncDetailAutoOpen = false;
     syncDetailHover = false;
-    telescopeOpen = true;
+    beginTelescopeEnterTransition();
   }
 
   function closeTelescope() {
-    telescopeOpen = false;
-    telescopeDragY = null;
+    if (!telescopeCameraEngaged) {
+      return;
+    }
+
+    beginTelescopeExitTransition();
   }
 
   function selectTelescopeSession(session: GraphSessionDto) {
-    closeTelescope();
+    telescopeOpen = false;
+    telescopePhase = 'idle';
+    telescopeDragY = null;
+    telescopeCameraBefore = null;
     descendToWave(session);
   }
 
@@ -1696,6 +1804,9 @@
   $: telescopeRangeLabel = TELESCOPE_RANGES[telescopeRangeIndex].label;
   $: telescopeDialOffsetY = -4 + (telescopeDialPct / TELESCOPE_DIAL_MAX) * 14;
   $: telescopeTimelineSessions = listTelescopeSessions(graph?.sessions ?? [], TELESCOPE_RANGES[telescopeRangeIndex].days);
+  $: if (!telescopeCanAccess && telescopeCameraEngaged && telescopePhase !== 'exiting') {
+    beginTelescopeExitTransition();
+  }
 
   type CalibrationVector = {
     stability: number;
@@ -2072,10 +2183,10 @@
     on:mouseup={onPointerUp}
     on:mouseleave={() => (dragging = false)}
     class:grabbing={dragging}
-    class:telescope-open={telescopeOpen}
+    class:telescope-open={telescopeCameraEngaged}
   ></canvas>
 
-  <nav class="navbar" class:faded={telescopeOpen}>
+  <nav class="navbar" class:faded={telescopeCameraEngaged}>
     <div class="nav-left">
       {#if level > 0}
         <button class="back-btn" on:click={level === 2 ? surfaceToWave : surfaceToConstellation}>
@@ -2183,12 +2294,12 @@
     on:transmute={transmuteCurrentNode}
   />
 
-  <button class="compose-btn" class:faded={telescopeOpen} on:click={openCompose}>+ compose</button>
+  <button class="compose-btn" class:faded={telescopeCameraEngaged} on:click={openCompose}>+ compose</button>
 
   <div class="telescope-shell" aria-label="timeline telescope">
     <button
       class="telescope-icon"
-      class:hidden={telescopeOpen}
+      class:hidden={telescopeCameraEngaged || !telescopeCanAccess}
       on:click={openTelescope}
       aria-label="open timeline telescope"
     >
@@ -2201,10 +2312,25 @@
         <line x1="15" y1="11" x2="17" y2="11"></line>
       </svg>
     </button>
+  </div>
 
-    <div class="telescope-instrument" class:open={telescopeOpen}>
+  <div
+    class="telescope-stage"
+    class:visible={telescopeCameraEngaged}
+    class:closing={telescopePhase === 'exiting'}
+    aria-hidden={!telescopeCameraEngaged}
+  >
+    {#if telescopeOpen}
+      <button class="telescope-backdrop" on:click={closeTelescope} aria-label="close timeline telescope"></button>
+    {/if}
+    <div
+      class="telescope-instrument"
+      class:open={telescopeCameraEngaged}
+      class:interactive={telescopeOpen}
+      class:closing={telescopePhase === 'exiting'}
+    >
       <div class="telescope-scope-wrap">
-        <svg width="52" height="270" viewBox="0 0 52 270" fill="none" aria-hidden="true">
+        <svg width="58" height="300" viewBox="0 0 52 270" fill="none" aria-hidden="true">
           <ellipse cx="26" cy="14" rx="15" ry="4" fill="#141025" stroke="rgba(160,140,255,0.4)" stroke-width="0.8"></ellipse>
           <ellipse cx="26" cy="14" rx="10" ry="2.5" fill="#0a0818" stroke="rgba(160,140,255,0.5)" stroke-width="0.5"></ellipse>
           <ellipse cx="24.5" cy="13.2" rx="3.5" ry="1" fill="rgba(200,185,255,0.12)"></ellipse>
@@ -2266,7 +2392,6 @@
 
       <div class="telescope-timeline-layer">
         <span class="telescope-range-badge">{telescopeRangeLabel}</span>
-        <button class="telescope-close-btn" on:click={closeTelescope}>close ×</button>
         <div class="telescope-line"></div>
         <div class="telescope-sessions">
           {#if telescopeTimelineSessions.length === 0}
@@ -2887,6 +3012,45 @@
     pointer-events: none;
   }
 
+  .telescope-stage {
+    --telescope-open-scale: 1.28;
+    --telescope-enter-scale: 1.01;
+    position: absolute;
+    inset: 0;
+    z-index: 16;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.38s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .telescope-stage.visible {
+    opacity: 1;
+    pointer-events: all;
+  }
+
+  .telescope-stage.visible.closing {
+    opacity: 0.9;
+    transition-duration: 0.52s;
+  }
+
+  .telescope-backdrop {
+    position: absolute;
+    inset: 0;
+    border: none;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    cursor: default;
+    z-index: 1;
+  }
+
+  .telescope-backdrop:focus {
+    outline: none;
+  }
+
   .telescope-icon {
     width: 36px;
     height: 36px;
@@ -2913,23 +3077,31 @@
   }
 
   .telescope-instrument {
-    position: absolute;
-    left: 0;
-    bottom: 0;
+    position: relative;
+    z-index: 2;
     display: flex;
     align-items: flex-end;
-    gap: 10px;
+    gap: 14px;
     opacity: 0;
     pointer-events: none;
-    transform: scale(0.86) translateY(20px);
-    transform-origin: left bottom;
-    transition: opacity 0.3s cubic-bezier(0.22, 1, 0.36, 1), transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+    transform: scale(var(--telescope-enter-scale)) translateY(24px);
+    transform-origin: 34% 84%;
+    transition: opacity 0.42s cubic-bezier(0.22, 1, 0.36, 1), transform 0.48s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .telescope-instrument.open {
     opacity: 1;
+    transform: scale(var(--telescope-open-scale)) translateY(0);
+  }
+
+  .telescope-instrument.open.closing {
+    opacity: 0.86;
+    transform: scale(calc(var(--telescope-open-scale) * 0.95)) translateY(12px);
+    transition-duration: 0.58s, 0.64s;
+  }
+
+  .telescope-instrument.open.interactive {
     pointer-events: all;
-    transform: scale(1) translateY(0);
   }
 
   .telescope-scope-wrap {
@@ -2947,8 +3119,8 @@
 
   .telescope-timeline-layer {
     position: relative;
-    width: 196px;
-    height: 274px;
+    width: 214px;
+    height: 300px;
     padding-top: 6px;
     padding-left: 2px;
   }
@@ -2962,24 +3134,6 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     white-space: nowrap;
-  }
-
-  .telescope-close-btn {
-    position: absolute;
-    top: -20px;
-    right: 0;
-    font-family: 'Departure Mono', monospace;
-    font-size: 10px;
-    color: rgba(140, 125, 210, 0.35);
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    transition: color 0.15s;
-    padding: 0;
-  }
-
-  .telescope-close-btn:hover {
-    color: rgba(200, 180, 255, 0.72);
   }
 
   .telescope-line {
@@ -3447,16 +3601,18 @@
       bottom: 12px;
     }
 
-    .telescope-instrument {
-      transform-origin: left bottom;
+    .telescope-stage {
+      --telescope-open-scale: 1.12;
+      --telescope-enter-scale: 0.99;
     }
 
-    .telescope-instrument.open {
-      transform: scale(0.94) translateY(0);
+    .telescope-instrument {
+      transform-origin: 36% 86%;
     }
 
     .telescope-timeline-layer {
-      width: 176px;
+      width: 188px;
+      height: 278px;
     }
 
     .drawer {
