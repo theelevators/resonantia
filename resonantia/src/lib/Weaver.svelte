@@ -1704,6 +1704,11 @@
     beginTelescopeExitTransition();
   }
 
+  function handleTelescopeClosePointerDown(event: PointerEvent) {
+    event.preventDefault();
+    closeTelescope();
+  }
+
   function selectTelescopeSession(session: GraphSessionDto) {
     telescopeOpen = false;
     telescopePhase = 'idle';
@@ -2321,11 +2326,11 @@
     aria-hidden={!telescopeCameraEngaged}
   >
     {#if telescopeOpen}
-      <button class="telescope-backdrop" on:click={closeTelescope} aria-label="close timeline telescope"></button>
+      <button class="telescope-backdrop" on:pointerdown={handleTelescopeClosePointerDown} aria-label="close timeline telescope"></button>
     {/if}
     <div
       class="telescope-instrument"
-      class:open={telescopeCameraEngaged}
+      class:open={telescopeOpen || telescopePhase === 'exiting'}
       class:interactive={telescopeOpen}
       class:closing={telescopePhase === 'exiting'}
     >
@@ -2381,7 +2386,7 @@
             ry="4"
             fill="transparent"
             class="telescope-eye-btn"
-            on:click={closeTelescope}
+            on:pointerdown={handleTelescopeClosePointerDown}
             on:keydown={handleTelescopeEyeKeydown}
             role="button"
             tabindex="0"
@@ -3014,7 +3019,7 @@
 
   .telescope-stage {
     --telescope-open-scale: 1.28;
-    --telescope-enter-scale: 1.01;
+    --telescope-enter-scale: 1.28;
     position: absolute;
     inset: 0;
     z-index: 16;
@@ -3023,7 +3028,7 @@
     justify-content: center;
     pointer-events: none;
     opacity: 0;
-    transition: opacity 0.38s cubic-bezier(0.22, 1, 0.36, 1);
+    transition: opacity 0.24s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .telescope-stage.visible {
@@ -3032,8 +3037,8 @@
   }
 
   .telescope-stage.visible.closing {
-    opacity: 0.9;
-    transition-duration: 0.52s;
+    opacity: 0.82;
+    transition-duration: 0.44s;
   }
 
   .telescope-backdrop {
@@ -3084,9 +3089,9 @@
     gap: 14px;
     opacity: 0;
     pointer-events: none;
-    transform: scale(var(--telescope-enter-scale)) translateY(24px);
+    transform: scale(var(--telescope-open-scale)) translateY(0);
     transform-origin: 34% 84%;
-    transition: opacity 0.42s cubic-bezier(0.22, 1, 0.36, 1), transform 0.48s cubic-bezier(0.22, 1, 0.36, 1);
+    transition: opacity 0.2s cubic-bezier(0.22, 1, 0.36, 1), transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .telescope-instrument.open {
@@ -3095,9 +3100,9 @@
   }
 
   .telescope-instrument.open.closing {
-    opacity: 0.86;
-    transform: scale(calc(var(--telescope-open-scale) * 0.95)) translateY(12px);
-    transition-duration: 0.58s, 0.64s;
+    opacity: 0.78;
+    transform: scale(calc(var(--telescope-open-scale) * 0.985)) translateY(2px);
+    transition-duration: 0.44s, 0.5s;
   }
 
   .telescope-instrument.open.interactive {
@@ -3603,7 +3608,7 @@
 
     .telescope-stage {
       --telescope-open-scale: 1.12;
-      --telescope-enter-scale: 0.99;
+      --telescope-enter-scale: 1.12;
     }
 
     .telescope-instrument {
