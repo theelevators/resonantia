@@ -44,6 +44,8 @@ const INDEXED_DB_ENDPOINT_CANDIDATES = [
 const MEM_FALLBACK_ENDPOINT = "mem://";
 const INDEXED_DB_OPEN_TIMEOUT_MS = 3000;
 const MEM_DB_OPEN_TIMEOUT_MS = 2500;
+const ENABLE_INDEXEDDB_STORAGE = false;
+const ENABLE_INDEXEDDB_PROMOTION = false;
 const APP_CONFIG_STORAGE_KEY = "resonantia:app-config:v1";
 const NODE_CACHE_STORAGE_KEY = "resonantia:nodes-cache:v1";
 const NODE_CACHE_LIMIT = 1200;
@@ -185,6 +187,9 @@ const INDEXED_DB_ERROR_MARKERS = [
   "invalidstateerror",
   "versionerror",
   "quotaexceedederror",
+  "closure invoked recursively",
+  "after being dropped",
+  "wasm_bindgen_throw",
 ];
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -308,6 +313,11 @@ function isIndexedDbOpenTimeoutFailure(error: unknown): boolean {
   return normalized.includes("open db endpoint indxdb://") && normalized.includes("timed out after");
 }
 
+function isWasmClosureLifecycleError(error: unknown): boolean {
+  const normalized = errorToString(error).toLowerCase();
+  return normalized.includes("closure invoked recursively") || normalized.includes("after being dropped");
+}
+
 function indexedDbHintFromEndpoint(endpoint: string): string {
   return endpoint.replace(/^indxdb:\/\//i, "").replace(/[?#].*$/, "").replace(/\/+$/, "") || "resonantia-local";
 }
@@ -369,6 +379,10 @@ async function recoverIndexedDbStore(endpoint: string, includeSiblingCandidates 
 function transportLabel(): string {
   const persistence = persistenceStatusLabel();
   const endpoint = indexedDbEndpointLabel(activeIndexedDbEndpoint);
+
+  if (!ENABLE_INDEXEDDB_STORAGE && storageMode === "mem") {
+    return "surrealdb wasm (mem mode; indexeddb disabled)";
+  }
 
   if (storageMode === "mem") {
     const reason = (lastIndexedDbError ?? "")
@@ -907,6 +921,14 @@ function normalizeConfig(input: unknown): AppConfig {
 }
 
 async function connectDb(): Promise<Surreal> {
+  if (!ENABLE_INDEXEDDB_STORAGE) {
+    const fallback = await openDbEndpoint(MEM_FALLBACK_ENDPOINT);
+    storageMode = "mem";
+    storageRecovered = false;
+    lastIndexedDbError = null;
+    return fallback;
+  }
+
   await ensurePersistentStoragePreference();
 
   let lastCandidateError: unknown = null;
@@ -923,6 +945,9 @@ async function connectDb(): Promise<Surreal> {
     } catch (error) {
       lastCandidateError = error;
       lastIndexedDbError = errorToString(error);
+      if (isWasmClosureLifecycleError(error)) {
+        break;
+      }
     }
   }
 
@@ -942,6 +967,10 @@ async function connectIndexedDbCandidate(endpoint: string): Promise<{ db: Surrea
       recovered: false,
     };
   } catch (firstError) {
+    if (isWasmClosureLifecycleError(firstError)) {
+      throw firstError;
+    }
+
     if (!isIndexedDbFailure(firstError)) {
       throw firstError;
     }
@@ -1005,19 +1034,26 @@ async function openDbEndpoint(endpoint: string): Promise<Surreal> {
 
     if (endpoint.startsWith("indxdb://")) {
       indexedDbOpenInFlightEndpoint = endpoint;
-      indexedDbOpenInFlight = openOperation.finally(() => {
+      const trackedOpen = openOperation.finally(() => {
         indexedDbOpenInFlight = null;
         indexedDbOpenInFlightEndpoint = null;
       });
+      // The tracking promise can outlive the caller. Attach a catch so rejected
+      // IndexedDB attempts do not surface as unhandled promise rejections.
+      trackedOpen.catch(() => undefined);
+      indexedDbOpenInFlight = trackedOpen;
     }
 
     await withTimeout(openOperation, timeoutMs, `open db endpoint ${endpoint}`);
 
     return db;
   } catch (error) {
-    // For indxdb timeout failures, avoid forcing close while IndexedDB callbacks may still be in-flight.
+    // For IndexedDB endpoints, avoid forcing close while callbacks may still be in-flight.
     // This prevents wasm "closure invoked recursively or after being dropped" crashes.
-    if (!(endpoint.startsWith("indxdb://") && isIndexedDbOpenTimeoutFailure(error))) {
+    const isIndexedDbEndpoint = endpoint.startsWith("indxdb://");
+    const shouldSkipClose = isIndexedDbEndpoint;
+
+    if (!shouldSkipClose) {
       await db.close().catch(() => undefined);
     }
     throw error;
@@ -1049,7 +1085,7 @@ async function getDb(): Promise<Surreal> {
 
   const db = await dbPromise;
 
-  if (storageMode === "mem") {
+  if (storageMode === "mem" && ENABLE_INDEXEDDB_PROMOTION) {
     return promoteMemFallbackToIndexedDb(db);
   }
 
