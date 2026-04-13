@@ -54,9 +54,40 @@
   const COLLAPSE_SCALE = 10.2;
   const LERP           = 0.09;
 
+  function compactViewport() {
+    return W() <= 520;
+  }
+
+  function mediumViewport() {
+    return W() <= 860;
+  }
+
+  function constellationCameraScale() {
+    if (compactViewport()) return 1.02;
+    if (mediumViewport()) return 1.1;
+    return CONSTELLATION_SCALE;
+  }
+
+  function collapseCameraScale() {
+    if (compactViewport()) return 8.95;
+    if (mediumViewport()) return 9.6;
+    return COLLAPSE_SCALE;
+  }
+
+  function negativeLayerScale() {
+    if (compactViewport()) return 0.74;
+    if (mediumViewport()) return 0.84;
+    return 0.92;
+  }
+
+  function constellationLayerScale() {
+    return negativeLayerActive ? negativeLayerScale() : constellationCameraScale();
+  }
+
   // ── Level state machine ────────────────────────────────────────
   // 0 = constellation  1 = wave (session)  2 = collapse (node/moment)
   let level = 0;
+  let negativeLayerActive = false;
   let selectedSession: GraphSessionDto | null = null;
   let selectedNode:    GraphNodeDto    | null = null;
   let cardData:    CollapseCardData | null = null;
@@ -74,6 +105,9 @@
   // ── Interaction ───────────────────────────────────────────
   let dragging    = false;
   let didDrag     = false;
+  let activePanPointerId: number | null = null;
+  let negativeLayerDriftX = 0;
+  let negativeLayerDriftY = 0;
   let dragStart:   Vec2 = { x: 0, y: 0 };
   let panCamStart: Vec2 = { x: 0, y: 0 };
 
@@ -168,21 +202,29 @@
   }
 
   // ── Coordinate helpers ──────────────────────────────────────────
+  function activeCamX() {
+    return camX + negativeLayerDriftX;
+  }
+
+  function activeCamY() {
+    return camY + negativeLayerDriftY;
+  }
+
   function toScreen(wx: number, wy: number): Vec2 {
     return {
-      x: (wx - camX) * camScale + W() / 2,
-      y: (wy - camY) * camScale + H() / 2,
+      x: (wx - activeCamX()) * camScale + W() / 2,
+      y: (wy - activeCamY()) * camScale + H() / 2,
     };
   }
 
   function toWorld(sx: number, sy: number): Vec2 {
     return {
-      x: (sx - W() / 2) / camScale + camX,
-      y: (sy - H() / 2) / camScale + camY,
+      x: (sx - W() / 2) / camScale + activeCamX(),
+      y: (sy - H() / 2) / camScale + activeCamY(),
     };
   }
 
-  function canvasXY(e: MouseEvent): Vec2 {
+  function canvasXY(e: { clientX: number; clientY: number }): Vec2 {
     const rect = canvas.getBoundingClientRect();
     return {
       x: e.clientX - rect.left,
@@ -254,7 +296,7 @@
       layoutConstellation();
       camX = targetCamX = W() / 2;
       camY = targetCamY = H() / 2;
-      camScale = targetCamScale = CONSTELLATION_SCALE;
+      camScale = targetCamScale = constellationLayerScale();
     } catch (e) {
       error = String(e);
     } finally {
@@ -587,18 +629,23 @@
     Object.keys(nodePos).forEach(key => delete nodePos[key]);
     const cx = W() / 2, cy = H() / 2;
     const n  = graph.sessions.length;
-    const spread = Math.min(W(), H()) * 0.32;
+    const aspect = W() / Math.max(H(), 1);
+    const compact = compactViewport();
+    const densityScale = 0.94 + Math.min(0.34, Math.sqrt(Math.max(1, n)) * 0.08);
+    const baseSpread = Math.min(W(), H()) * (compact ? 0.45 : 0.4) * densityScale;
+    const spreadX = baseSpread * Math.max(0.92, Math.min(1.34, aspect * (compact ? 1.06 : 1)));
+    const spreadY = baseSpread * Math.max(0.9, Math.min(1.18, (1 / Math.max(aspect, 0.01)) * (compact ? 0.86 : 0.82)));
     const goldenAngle = Math.PI * (3 - Math.sqrt(5));
 
     graph.sessions.forEach((s, i) => {
       const seed = hashUnit(s.id);
       const angle = i * goldenAngle + seed * 1.8;
-      const radial = spread * (0.26 + Math.sqrt((i + 0.5) / Math.max(1, n)) * 0.78);
-      const bendX = Math.sin(angle * 1.4 + seed * 8) * spread * 0.16;
-      const bendY = Math.cos(angle * 1.1 + seed * 6) * spread * 0.12;
+      const radial = 0.24 + Math.sqrt((i + 0.5) / Math.max(1, n)) * 0.88;
+      const bendX = Math.sin(angle * 1.4 + seed * 8) * spreadX * 0.14;
+      const bendY = Math.cos(angle * 1.1 + seed * 6) * spreadY * 0.12;
       sessionPos[s.id] = {
-        x: cx + Math.cos(angle) * radial + bendX,
-        y: cy + Math.sin(angle) * radial * 0.76 + bendY,
+        x: cx + Math.cos(angle) * spreadX * radial + bendX,
+        y: cy + Math.sin(angle) * spreadY * radial + bendY,
       };
     });
 
@@ -634,9 +681,10 @@
     const orbitRadius = sessionOrbitRadius(session);
     const worldHalfWidth = orbitRadius + 24;
     const worldHalfHeight = orbitRadius * 0.76 + 28;
-    const fitX = (W() * 0.4) / Math.max(worldHalfWidth, 1);
-    const fitY = (H() * 0.32) / Math.max(worldHalfHeight, 1);
-    return Math.max(2.05, Math.min(WAVE_SCALE, Math.min(fitX, fitY)));
+    const fitX = (W() * (compactViewport() ? 0.46 : 0.4)) / Math.max(worldHalfWidth, 1);
+    const fitY = (H() * (compactViewport() ? 0.38 : 0.32)) / Math.max(worldHalfHeight, 1);
+    const minWaveScale = compactViewport() ? 1.58 : (mediumViewport() ? 1.9 : 2.05);
+    return Math.max(minWaveScale, Math.min(WAVE_SCALE, Math.min(fitX, fitY)));
   }
 
   function collapseDescriptors(avec: { stability: number; friction: number; logic: number; autonomy: number }): string {
@@ -667,6 +715,7 @@
   // ── Navigation ────────────────────────────────────────────────
   function descendToWave(s: GraphSessionDto) {
     closeTransientUi();
+    negativeLayerActive = false;
     selectedSession = s;
     selectedNode    = null;
     closeCard();
@@ -686,7 +735,7 @@
     transmuteError = null;
     transmuting = false;
     const np = nodeRenderPos(n);
-    if (np) { targetCamX = np.x; targetCamY = np.y; targetCamScale = COLLAPSE_SCALE; }
+    if (np) { targetCamX = np.x; targetCamY = np.y; targetCamScale = collapseCameraScale(); }
 
     cardData = {
       node:            n,
@@ -724,9 +773,10 @@
     closeTransientUi();
     selectedSession = null;
     selectedNode    = null;
+    negativeLayerActive = false;
     closeCard();
     level = 0;
-    targetCamX = W() / 2; targetCamY = H() / 2; targetCamScale = CONSTELLATION_SCALE;
+    targetCamX = W() / 2; targetCamY = H() / 2; targetCamScale = constellationLayerScale();
   }
 
   function closeCard() {
@@ -1246,6 +1296,29 @@
     }
   }
 
+  function drawNegativeLayerVignette() {
+    if (!negativeLayerActive || level !== 0 || telescopeCameraEngaged) return;
+
+    const centerX = W() / 2;
+    const centerY = H() / 2;
+    const radius = Math.max(W(), H()) * 0.84;
+    const pulse = 0.012 + Math.sin(t * 0.34) * 0.004;
+
+    const vignette = ctx.createRadialGradient(centerX, centerY, radius * 0.38, centerX, centerY, radius);
+    vignette.addColorStop(0, 'rgba(2, 4, 8, 0)');
+    vignette.addColorStop(0.7, 'rgba(4, 8, 16, 0.08)');
+    vignette.addColorStop(1, `rgba(3, 7, 14, ${0.19 + pulse})`);
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, W(), H());
+
+    const halo = ctx.createRadialGradient(centerX, centerY, radius * 0.5, centerX, centerY, radius);
+    halo.addColorStop(0, 'rgba(140, 184, 245, 0)');
+    halo.addColorStop(0.88, 'rgba(140, 184, 245, 0.022)');
+    halo.addColorStop(1, 'rgba(140, 184, 245, 0.055)');
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, W(), H());
+  }
+
   // ── Main render loop ────────────────────────────────────────────
   function draw() {
     if (!ctx) { raf = requestAnimationFrame(draw); return; }
@@ -1253,6 +1326,24 @@
     camX     += (targetCamX     - camX)     * LERP;
     camY     += (targetCamY     - camY)     * LERP;
     camScale += (targetCamScale - camScale) * LERP;
+
+    const driftEnabled = negativeLayerActive && level === 0 && !telescopeCameraEngaged && !dragging;
+    const driftPx = compactViewport() ? 7.5 : 10.5;
+    const targetDriftX = driftEnabled
+      ? Math.sin(t * 0.16 + 0.8) * (driftPx / Math.max(camScale, 0.0001))
+      : 0;
+    const targetDriftY = driftEnabled
+      ? Math.cos(t * 0.12 + 1.7) * ((driftPx * 0.58) / Math.max(camScale, 0.0001))
+      : 0;
+    const driftLerp = driftEnabled ? 0.045 : 0.08;
+    negativeLayerDriftX += (targetDriftX - negativeLayerDriftX) * driftLerp;
+    negativeLayerDriftY += (targetDriftY - negativeLayerDriftY) * driftLerp;
+
+    if (!driftEnabled && Math.abs(negativeLayerDriftX) < 0.0008 && Math.abs(negativeLayerDriftY) < 0.0008) {
+      negativeLayerDriftX = 0;
+      negativeLayerDriftY = 0;
+    }
+
     settleTelescopeTransition();
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1266,7 +1357,7 @@
     ctx.save();
     ctx.translate(W() / 2, H() / 2);
     ctx.scale(camScale, camScale);
-    ctx.translate(-camX, -camY);
+    ctx.translate(-activeCamX(), -activeCamY());
     drawEdges();
     drawSessions();
     drawWaveBoundary();
@@ -1276,6 +1367,7 @@
 
     drawWaveLabels();
     drawCollapseOrb();
+  drawNegativeLayerVignette();
     drawHints();
 
     if (loading) {
@@ -1321,29 +1413,50 @@
     if (!telescopeCameraEngaged && level === 0) {
       camX = targetCamX = W() / 2;
       camY = targetCamY = H() / 2;
-      camScale = targetCamScale = CONSTELLATION_SCALE;
+      camScale = targetCamScale = constellationLayerScale();
     }
   }
 
   // ── Pointer events ─────────────────────────────────────────────
-  function onPointerDown(e: MouseEvent) {
+  function onPointerDown(e: PointerEvent) {
     if (telescopeCameraEngaged || level !== 0) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    if (negativeLayerDriftX !== 0 || negativeLayerDriftY !== 0) {
+      camX += negativeLayerDriftX;
+      camY += negativeLayerDriftY;
+      targetCamX += negativeLayerDriftX;
+      targetCamY += negativeLayerDriftY;
+      negativeLayerDriftX = 0;
+      negativeLayerDriftY = 0;
+    }
+
     dragging    = true;
     didDrag     = false;
+    activePanPointerId = e.pointerId;
     dragStart   = { x: e.clientX, y: e.clientY };
     panCamStart = { x: camX, y: camY };
+    canvas.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
   }
 
-  function onPointerMove(e: MouseEvent) {
+  function onPointerMove(e: PointerEvent) {
+    if (activePanPointerId !== null && e.pointerId !== activePanPointerId) return;
     if (telescopeCameraEngaged || !dragging || level !== 0) return;
     const dx = e.clientX - dragStart.x;
     const dy = e.clientY - dragStart.y;
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didDrag = true;
     camX = targetCamX = panCamStart.x - dx / camScale;
     camY = targetCamY = panCamStart.y - dy / camScale;
+    e.preventDefault();
   }
 
-  function onPointerUp(e: MouseEvent) {
+  function onPointerUp(e: PointerEvent) {
+    if (activePanPointerId !== null && e.pointerId !== activePanPointerId) return;
+    if (activePanPointerId !== null && canvas.hasPointerCapture?.(activePanPointerId)) {
+      canvas.releasePointerCapture(activePanPointerId);
+    }
+    activePanPointerId = null;
     dragging = false;
     if (telescopeCameraEngaged) return;
     if (didDrag) return;
@@ -1378,6 +1491,16 @@
         }
       }
     }
+  }
+
+  function onPointerCancel(e: PointerEvent) {
+    if (activePanPointerId !== null && e.pointerId !== activePanPointerId) return;
+    if (activePanPointerId !== null && canvas.hasPointerCapture?.(activePanPointerId)) {
+      canvas.releasePointerCapture(activePanPointerId);
+    }
+    activePanPointerId = null;
+    dragging = false;
+    didDrag = false;
   }
 
   // ── Health ───────────────────────────────────────────────────
@@ -1627,13 +1750,15 @@
   }
 
   function telescopeFocusScaleFor(levelValue: number, cameraScale: number) {
+    const compact = compactViewport();
+
     if (levelValue === 1) {
       // Entering telescope from wave should pull back for context, not punch in.
-      return Math.max(1.82, Math.min(TELESCOPE_WAVE_SCALE, cameraScale * 0.72));
+      return Math.max(compact ? 1.55 : 1.82, Math.min(TELESCOPE_WAVE_SCALE, cameraScale * (compact ? 0.66 : 0.72)));
     }
 
     // In constellation, use a subtle pull-back so the telescope stage feels cinematic.
-    return Math.max(0.92, Math.min(TELESCOPE_CONSTELLATION_SCALE, cameraScale * 0.86));
+    return Math.max(compact ? 0.84 : 0.92, Math.min(TELESCOPE_CONSTELLATION_SCALE, cameraScale * (compact ? 0.82 : 0.86)));
   }
 
   function telescopeFocusTargetFrom(camera: CameraState, levelValue: number) {
@@ -1683,6 +1808,15 @@
       telescopePhase = 'idle';
       telescopeCameraBefore = null;
     }
+  }
+
+  function toggleNegativeLayer() {
+    if (level !== 0 || telescopeCameraEngaged) {
+      return;
+    }
+
+    negativeLayerActive = !negativeLayerActive;
+    targetCamScale = constellationLayerScale();
   }
 
   function openTelescope() {
@@ -2183,10 +2317,11 @@
 <div class="weaver-root" bind:this={container}>
   <canvas
     bind:this={canvas}
-    on:mousedown={onPointerDown}
-    on:mousemove={onPointerMove}
-    on:mouseup={onPointerUp}
-    on:mouseleave={() => (dragging = false)}
+    on:pointerdown={onPointerDown}
+    on:pointermove={onPointerMove}
+    on:pointerup={onPointerUp}
+    on:pointercancel={onPointerCancel}
+    on:lostpointercapture={onPointerCancel}
     class:grabbing={dragging}
     class:telescope-open={telescopeCameraEngaged}
   ></canvas>
@@ -2302,6 +2437,18 @@
   <button class="compose-btn" class:faded={telescopeCameraEngaged} on:click={openCompose}>+ compose</button>
 
   <div class="telescope-shell" aria-label="timeline telescope">
+    <button
+      class="negative-layer-btn"
+      class:active={negativeLayerActive}
+      class:hidden={telescopeCameraEngaged || level !== 0}
+      on:click={toggleNegativeLayer}
+      aria-label={negativeLayerActive ? 'return to constellation scale' : 'zoom out to negative layer'}
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(178,208,255,0.86)" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="8"></circle>
+        <line x1="8.5" y1="12" x2="15.5" y2="12"></line>
+      </svg>
+    </button>
     <button
       class="telescope-icon"
       class:hidden={telescopeCameraEngaged || !telescopeCanAccess}
@@ -2426,7 +2573,7 @@
   </div>
 
   {#if composeOpen}
-    <div class="drawer" role="dialog" aria-label="Compose context">
+    <div class="drawer drawer-compose" role="dialog" aria-label="Compose context">
       <div class="drawer-header">
         <span class="drawer-title">compose</span>
         <button class="close-btn" on:click={() => (composeOpen = false)}>✕</button>
@@ -2609,9 +2756,6 @@
     --safe-left: env(safe-area-inset-left, 0px);
     position: fixed;
     inset: 0;
-    width: 100vw;
-    height: 100vh;
-    min-height: 100dvh;
     overflow: hidden;
     background: #0a0b0e;
     font-family: 'Departure Mono', 'Courier New', monospace;
@@ -2622,6 +2766,7 @@
     inset: 0;
     width: 100%;
     height: 100%;
+    touch-action: none;
     cursor: grab;
     display: block;
   }
@@ -3019,7 +3164,43 @@
     left: max(20px, calc(var(--safe-left) + 12px));
     bottom: max(20px, calc(var(--safe-bottom) + 12px));
     z-index: 16;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
     pointer-events: none;
+  }
+
+  .negative-layer-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 999px;
+    background: rgba(12, 15, 22, 0.9);
+    border: 0.5px solid rgba(132, 172, 226, 0.32);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+    pointer-events: all;
+    transition: border-color 0.2s, background 0.2s, opacity 0.16s, transform 0.16s;
+  }
+
+  .negative-layer-btn:hover {
+    border-color: rgba(172, 206, 255, 0.58);
+    background: rgba(30, 48, 78, 0.58);
+  }
+
+  .negative-layer-btn.active {
+    border-color: rgba(188, 220, 255, 0.72);
+    background: rgba(52, 83, 130, 0.54);
+    box-shadow: 0 0 14px rgba(74, 130, 208, 0.2);
+  }
+
+  .negative-layer-btn.hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(3px);
   }
 
   .telescope-stage {
@@ -3260,6 +3441,16 @@
     font-family: 'Departure Mono', 'Courier New', monospace;
     overscroll-behavior: contain;
     scrollbar-width: thin;
+  }
+
+  .drawer-compose {
+    top: max(64px, calc(var(--safe-top) + 46px));
+    bottom: auto;
+    max-height: min(560px, calc(100dvh - 168px));
+  }
+
+  .drawer-compose .drawer-textarea {
+    min-height: 122px;
   }
 
   .drawer-header {
@@ -3631,6 +3822,17 @@
       width: calc(100vw - 20px);
       max-height: calc(100dvh - 130px);
       padding: 16px;
+    }
+
+    .drawer-compose {
+      top: calc(var(--safe-top) + 56px);
+      bottom: auto;
+      max-height: min(52dvh, 420px);
+      padding: 14px;
+    }
+
+    .drawer-compose .drawer-textarea {
+      min-height: 104px;
     }
 
     .profile-grid,
