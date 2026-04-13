@@ -885,7 +885,20 @@
       pointer-events: all;
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 10px;
+    }
+
+    .nav-link {
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.34);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .nav-link:hover {
+      color: rgba(255,255,255,0.72);
     }
 
     .status-dot {
@@ -1098,6 +1111,8 @@
   <a href="/" class="nav-brand">resonantia</a>
   <div class="nav-right">
     <div class="status-dot"></div>
+    <a href="/about/" class="nav-link">about</a>
+    <a href="/tech/" class="nav-link">tech</a>
   </div>
 </nav>
 
@@ -1110,7 +1125,6 @@
     Resonantia attempts to find the you that gets lost in conversation.<br>
     <strong>A wave, moment, collapse</strong> — resonate and weave it all together.
   </p>
-  <a href="#enter" class="enter-btn">enter</a>
   <p class="scroll-hint">scroll to explore</p>
 </section>
 
@@ -1397,33 +1411,9 @@
     ⏣ Spatio-Temporal Transfer Protocol.
     Your mind, made navigable.
   </p>
-  <button class="enter-btn" id="request-access-trigger" type="button">request access</button>
+  <a class="enter-btn" href="https://your-app-host.example.com" target="_blank" rel="noopener noreferrer">enter</a>
   <p class="footer-domain">resonantia.me</p>
 </section>
-
-<div class="access-modal" id="access-modal" aria-hidden="true">
-  <div class="access-panel" role="dialog" aria-modal="true" aria-labelledby="access-title">
-    <div class="access-header">
-      <h3 class="access-title" id="access-title">Request access</h3>
-      <button class="access-close" id="access-close" type="button" aria-label="Close request access">✕</button>
-    </div>
-    <p class="access-copy">Leave your name and email and Resonantia will open a ready-to-send note to Keryx Labs.</p>
-    <form class="access-form" id="access-form">
-      <label class="access-field">
-        <span class="access-label">name</span>
-        <input class="access-input" id="access-name" name="name" type="text" autocomplete="name" required />
-      </label>
-      <label class="access-field">
-        <span class="access-label">email</span>
-        <input class="access-input" id="access-email" name="email" type="email" autocomplete="email" required />
-      </label>
-      <div class="access-actions">
-        <button class="access-btn cancel" id="access-cancel" type="button">cancel</button>
-        <button class="access-btn submit" type="submit">send request</button>
-      </div>
-    </form>
-  </div>
-</div>
 
 <script>
 const constellationCanvas = document.getElementById('constellation');
@@ -1793,61 +1783,6 @@ const mObserver = new IntersectionObserver(entries => {
   });
 }, { threshold: 0.5 });
 mObserver.observe(manifestoQ);
-
-const accessTrigger = document.getElementById('request-access-trigger');
-const accessModal = document.getElementById('access-modal');
-const accessClose = document.getElementById('access-close');
-const accessCancel = document.getElementById('access-cancel');
-const accessForm = document.getElementById('access-form');
-const accessName = document.getElementById('access-name');
-const accessEmail = document.getElementById('access-email');
-
-function openAccessModal() {
-  accessModal.classList.add('open');
-  accessModal.setAttribute('aria-hidden', 'false');
-  requestAnimationFrame(() => accessName.focus());
-}
-
-function closeAccessModal() {
-  accessModal.classList.remove('open');
-  accessModal.setAttribute('aria-hidden', 'true');
-}
-
-accessTrigger.addEventListener('click', openAccessModal);
-accessClose.addEventListener('click', closeAccessModal);
-accessCancel.addEventListener('click', closeAccessModal);
-
-accessModal.addEventListener('click', (event) => {
-  if (event.target === accessModal) closeAccessModal();
-});
-
-window.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && accessModal.classList.contains('open')) {
-    closeAccessModal();
-  }
-});
-
-accessForm.addEventListener('submit', (event) => {
-  event.preventDefault();
-
-  const name = accessName.value.trim();
-  const email = accessEmail.value.trim();
-  if (!name || !email) return;
-
-  const subject = encodeURIComponent('Resonantia access request');
-  const body = encodeURIComponent([
-    'Hi Keryx Labs,',
-    '',
-    'I would like to request access to Resonantia.',
-    '',
-    `Name: ${name}`,
-    `Email: ${email}`,
-  ].join('\n'));
-
-  window.location.href = `mailto:keryxlabs@gmail.com?subject=${subject}&body=${body}`;
-  closeAccessModal();
-  accessForm.reset();
-});
 </script>
 </body>
 </html>

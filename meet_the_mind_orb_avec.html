@@ -1,0 +1,214 @@
+
+<style>
+  .orb-scene {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.2rem;
+    padding: 2.5rem 1.5rem 2rem;
+  }
+  canvas { display: block; }
+  .avec-tags {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .avec-tag {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    padding: 3px 12px;
+    border-radius: 99px;
+    font-family: monospace;
+    border: 0.5px solid;
+    opacity: 0.75;
+  }
+  .tag-s { color: rgba(232,232,235,0.9); border-color: rgba(232,232,235,0.25); }
+  .tag-f { color: rgba(233,148,58,0.9);  border-color: rgba(233,148,58,0.25);  }
+  .tag-l { color: rgba(91,155,213,0.9);  border-color: rgba(91,155,213,0.25);  }
+  .tag-a { color: rgba(122,170,122,0.9); border-color: rgba(122,170,122,0.25); }
+  .psi-line {
+    font-family: monospace;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: rgba(255,255,255,0.25);
+    text-transform: uppercase;
+  }
+</style>
+
+<div class="orb-scene">
+  <canvas id="orb" width="280" height="280"></canvas>
+  <div class="avec-tags">
+    <span class="avec-tag tag-s">grounding 0.91</span>
+    <span class="avec-tag tag-f">wear 0.22</span>
+    <span class="avec-tag tag-l">clarity 0.88</span>
+    <span class="avec-tag tag-a">self-trust 0.97</span>
+  </div>
+  <span class="psi-line">Ψ 2.98</span>
+</div>
+
+<script>
+const canvas = document.getElementById('orb');
+const ctx = canvas.getContext('2d');
+const W = 280, H = 280, CX = W/2, CY = H/2;
+
+const AVEC = { s: 0.91, f: 0.22, l: 0.88, a: 0.97 };
+
+const COLORS = {
+  s: { r: 232, g: 232, b: 235 },
+  f: { r: 233, g: 148, b: 58  },
+  l: { r:  91, g: 155, b: 213 },
+  a: { r: 122, g: 170, b: 122 }
+};
+
+function mixColor() {
+  const weights = [AVEC.s, AVEC.f, AVEC.l, AVEC.a];
+  const cols = [COLORS.s, COLORS.f, COLORS.l, COLORS.a];
+  let r=0,g=0,b=0,total=0;
+  weights.forEach((w,i) => { r+=cols[i].r*w; g+=cols[i].g*w; b+=cols[i].b*w; total+=w; });
+  return { r: r/total, g: g/total, b: b/total };
+}
+
+const phi = (1+Math.sqrt(5))/2;
+const icoVerts = [
+  [-1,phi,0],[1,phi,0],[-1,-phi,0],[1,-phi,0],
+  [0,-1,phi],[0,1,phi],[0,-1,-phi],[0,1,-phi],
+  [phi,0,-1],[phi,0,1],[-phi,0,-1],[-phi,0,1]
+].map(([x,y,z]) => { const n=Math.sqrt(x*x+y*y+z*z); return [x/n,y/n,z/n]; });
+
+const icoFaces = [
+  [0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],
+  [1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+  [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],
+  [4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]
+];
+
+const dimOrder = ['s','f','l','a'];
+const streamDefs = [];
+(function initStreams() {
+  const sorted = [...dimOrder].sort((a,b) => AVEC[b]-AVEC[a]);
+  [-1,1].forEach(side => {
+    sorted.forEach((dim,i) => {
+      const count = Math.round(AVEC[dim]*3)+1;
+      for(let j=0;j<count;j++){
+        streamDefs.push({
+          side,
+          offset: (j-(count-1)/2)*6,
+          col: COLORS[dim],
+          destCol: COLORS[sorted[(i+1)%sorted.length]],
+          thickness: AVEC[dim]*2.4+0.4,
+          phase: Math.random()*Math.PI*2,
+          speed: 0.35+Math.random()*0.25
+        });
+      }
+    });
+  });
+})();
+
+function project(v, rx, ry, rz, scale) {
+  let [x,y,z] = v;
+  let y1=y*Math.cos(rx)-z*Math.sin(rx), z1=y*Math.sin(rx)+z*Math.cos(rx);
+  let x2=x*Math.cos(ry)+z1*Math.sin(ry), z2=-x*Math.sin(ry)+z1*Math.cos(ry);
+  let x3=x2*Math.cos(rz)-y1*Math.sin(rz), y3=x2*Math.sin(rz)+y1*Math.cos(rz);
+  const d=3, fov=d/(d+z2);
+  return { px: CX+x3*scale*fov, py: CY+y3*scale*fov, z: z2 };
+}
+
+let t = 0;
+const mixed = mixColor();
+const psiVal = AVEC.s+AVEC.f+AVEC.l+AVEC.a;
+
+function draw() {
+  ctx.clearRect(0,0,W,H);
+
+  const rx = t*0.17, ry = t*0.23, rz = t*0.07;
+  const pulseRate = 0.28;
+  const pulseAmt = 0.03;
+  const scale = 78*(1+Math.sin(t*pulseRate)*pulseAmt);
+
+  // outer ambient
+  const og = ctx.createRadialGradient(CX,CY,0,CX,CY,scale*1.55);
+  og.addColorStop(0,`rgba(${mixed.r},${mixed.g},${mixed.b},0.11)`);
+  og.addColorStop(0.5,`rgba(${mixed.r},${mixed.g},${mixed.b},0.05)`);
+  og.addColorStop(1,`rgba(${mixed.r},${mixed.g},${mixed.b},0)`);
+  ctx.fillStyle=og;
+  ctx.beginPath(); ctx.arc(CX,CY,scale*1.55,0,Math.PI*2); ctx.fill();
+
+  // streams
+  streamDefs.forEach(s => {
+    const sx = s.side<0 ? -W*0.08 : W*1.08;
+    const ex = s.side<0 ? CX-scale*0.85 : CX+scale*0.85;
+    const mx = (sx+ex)/2;
+    const by = CY+s.offset;
+    const wav = Math.sin(t*s.speed+s.phase)*(10+Math.abs(s.offset)*0.4);
+    const grad = ctx.createLinearGradient(sx,by,ex,by);
+    const sc=s.col, dc=s.destCol;
+    if(s.side<0){
+      grad.addColorStop(0,`rgba(${sc.r},${sc.g},${sc.b},0)`);
+      grad.addColorStop(0.4,`rgba(${sc.r},${sc.g},${sc.b},0.48)`);
+      grad.addColorStop(0.85,`rgba(${dc.r},${dc.g},${dc.b},0.28)`);
+      grad.addColorStop(1,`rgba(${dc.r},${dc.g},${dc.b},0)`);
+    } else {
+      grad.addColorStop(0,`rgba(${sc.r},${sc.g},${sc.b},0)`);
+      grad.addColorStop(0.15,`rgba(${sc.r},${sc.g},${sc.b},0.28)`);
+      grad.addColorStop(0.6,`rgba(${dc.r},${dc.g},${dc.b},0.48)`);
+      grad.addColorStop(1,`rgba(${dc.r},${dc.g},${dc.b},0)`);
+    }
+    ctx.beginPath();
+    ctx.moveTo(sx,by);
+    ctx.bezierCurveTo(mx*0.5,by+wav,ex*0.72,by-wav*0.5,ex,by+s.offset*0.1);
+    ctx.strokeStyle=grad;
+    ctx.lineWidth=s.thickness;
+    ctx.lineCap='round';
+    ctx.stroke();
+  });
+
+  // inner glow
+  const ig = ctx.createRadialGradient(CX,CY,0,CX,CY,scale*0.75);
+  ig.addColorStop(0,`rgba(${mixed.r},${mixed.g},${mixed.b},0.15)`);
+  ig.addColorStop(0.5,`rgba(${mixed.r},${mixed.g},${mixed.b},0.07)`);
+  ig.addColorStop(1,`rgba(${mixed.r},${mixed.g},${mixed.b},0)`);
+  ctx.fillStyle=ig;
+  ctx.beginPath(); ctx.arc(CX,CY,scale*0.75,0,Math.PI*2); ctx.fill();
+
+  // project verts
+  const pv = icoVerts.map(v => project(v,rx,ry,rz,scale));
+
+  // sort faces by depth
+  const sorted = icoFaces
+    .map((f,i) => ({ f, i, z: (pv[f[0]].z+pv[f[1]].z+pv[f[2]].z)/3 }))
+    .sort((a,b) => a.z-b.z);
+
+  sorted.forEach(({f,i,z}) => {
+    const [a,b,c] = f.map(vi => pv[vi]);
+    const normZ = (z+1)/2;
+    const bright = 0.14+normZ*0.42;
+    const dim = dimOrder[i%4];
+    const col = COLORS[dim];
+    const w = AVEC[dim];
+    const alpha = Math.min(bright*w*0.65+bright*0.28, 0.82);
+    ctx.beginPath();
+    ctx.moveTo(a.px,a.py); ctx.lineTo(b.px,b.py); ctx.lineTo(c.px,c.py);
+    ctx.closePath();
+    ctx.fillStyle=`rgba(${col.r},${col.g},${col.b},${alpha})`;
+    ctx.fill();
+    const ea = 0.07+normZ*0.11;
+    ctx.strokeStyle=`rgba(255,255,255,${ea})`;
+    ctx.lineWidth=0.5;
+    ctx.stroke();
+  });
+
+  // core
+  const cr = scale*0.22;
+  const cg = ctx.createRadialGradient(CX-cr*0.3,CY-cr*0.35,0,CX,CY,cr);
+  cg.addColorStop(0,`rgba(255,255,255,${0.88+Math.sin(t*pulseRate*2)*0.08})`);
+  cg.addColorStop(0.4,`rgba(${mixed.r},${mixed.g},${mixed.b},0.72)`);
+  cg.addColorStop(1,`rgba(${mixed.r},${mixed.g},${mixed.b},0)`);
+  ctx.fillStyle=cg; ctx.beginPath(); ctx.arc(CX,CY,cr,0,Math.PI*2); ctx.fill();
+
+  t+=0.008;
+  requestAnimationFrame(draw);
+}
+
+draw();
+</script>
