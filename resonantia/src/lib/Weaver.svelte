@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { avecColor, avecToRgb, shortLabel, AVEC_HEX, AVEC_COLORS, formatTimestamp } from '@resonantia/core';
   import CollapseCard from '@resonantia/ui/components/CollapseCard.svelte';
+  import WalkthroughGuide from './components/WalkthroughGuide.svelte';
   import { resonantiaClient } from './resonantiaClient';
   import type {
     AiSummary,
@@ -45,10 +46,25 @@
   let sessionAvecMap: Record<string, { stability: number; friction: number; logic: number; autonomy: number; psi: number }> = {};
   let nodeAvecMap: Record<string, { stability: number; friction: number; logic: number; autonomy: number; psi: number }> = {};
   const ONBOARDING_DISMISSED_KEY = 'resonantia:onboarding-dismissed:v1';
+  const WALKTHROUGH_SESSION_SEED = 'resonantia-demo';
   let onboardingOpen = false;
   let onboardingDismissed = false;
   let onboardingHydrated = false;
   let hasGraphData = false;
+
+  type WalkthroughMode = 'first-run' | 'demo';
+  type WalkthroughStep = 'intro' | 'settings' | 'checkin' | 'telescope' | 'importare' | 'live' | 'complete';
+
+  let walkthroughMode: WalkthroughMode = 'first-run';
+  let walkthroughStep: WalkthroughStep = 'intro';
+  let walkthroughCueVisible = false;
+  let walkthroughCueTimer: ReturnType<typeof setTimeout> | null = null;
+  let walkthroughAdvanceTimer: ReturnType<typeof setTimeout> | null = null;
+  let walkthroughStepLocked = false;
+  let walkthroughTargetSelector: string | null = null;
+  let walkthroughAllowedSelectors: string[] = [];
+  let walkthroughStepSatisfied = false;
+  let walkthroughCompact = false;
 
   const AVEC_DIMS = ['stability', 'friction', 'logic', 'autonomy'] as const;
   type AvecDim = typeof AVEC_DIMS[number];
@@ -349,32 +365,249 @@
   }
 
   $: hasGraphData = Boolean(graph && ((graph.sessions?.length ?? 0) > 0 || (graph.nodes?.length ?? 0) > 0));
-  $: if (onboardingHydrated && !loading && !error && !hasGraphData && !onboardingDismissed) {
-    onboardingOpen = true;
+  $: if (onboardingHydrated && !loading && !error && !hasGraphData && !onboardingDismissed && !onboardingOpen) {
+    openWalkthrough('first-run');
+  }
+
+  function walkthroughSelectorForStep(step: WalkthroughStep): string | null {
+    switch (step) {
+      case 'settings':
+        return '[data-tour-target="settings"]';
+      case 'checkin':
+        return '[data-tour-target="checkin"]';
+      case 'telescope':
+        return '[data-tour-target="telescope"]';
+      case 'importare':
+        return '[data-tour-target="compose-importare"]';
+      case 'live':
+        if (composeOpen && composeMode === 'importare') {
+          return '[data-tour-target="compose-switch-live"]';
+        }
+        return '[data-tour-target="compose-live"]';
+      default:
+        return null;
+    }
+  }
+
+  function walkthroughAllowlistForStep(step: WalkthroughStep): string[] {
+    switch (step) {
+      case 'settings':
+        return ['[data-tour-target="settings"]', '[data-tour-target="menu-toggle"]'];
+      case 'checkin':
+        return ['[data-tour-target="checkin"]', '[data-tour-target="menu-toggle"]'];
+      case 'telescope':
+        return ['[data-tour-target="telescope"]'];
+      case 'importare':
+        return ['[data-tour-target="compose-importare"]', '[data-tour-target="compose-toggle"]'];
+      case 'live':
+        return ['[data-tour-target="compose-live"]', '[data-tour-target="compose-switch-live"]', '[data-tour-target="compose-toggle"]'];
+      default:
+        return [];
+    }
+  }
+
+  $: walkthroughTargetSelector = onboardingOpen
+    ? walkthroughSelectorForStep(walkthroughStep)
+    : null;
+
+  $: walkthroughAllowedSelectors = onboardingOpen
+    ? walkthroughAllowlistForStep(walkthroughStep)
+    : [];
+
+  $: walkthroughCompact = onboardingOpen
+    && walkthroughStep !== 'intro'
+    && walkthroughStep !== 'complete'
+    && (settingsOpen || calibrateOpen || composeOpen || telescopeCameraEngaged);
+
+  $: if (!onboardingOpen) {
+    walkthroughStepSatisfied = false;
+  }
+
+  function markWalkthroughStepSatisfied(step: WalkthroughStep) {
+    if (onboardingOpen && walkthroughStep === step) {
+      walkthroughStepSatisfied = true;
+    }
+  }
+
+  function toggleMenu() {
+    menuOpen = !menuOpen;
+  }
+
+  function clearWalkthroughCueTimer() {
+    if (walkthroughCueTimer !== null) {
+      clearTimeout(walkthroughCueTimer);
+      walkthroughCueTimer = null;
+    }
+  }
+
+  function clearWalkthroughAdvanceTimer() {
+    if (walkthroughAdvanceTimer !== null) {
+      clearTimeout(walkthroughAdvanceTimer);
+      walkthroughAdvanceTimer = null;
+    }
+  }
+
+  function setWalkthroughStep(step: WalkthroughStep, cueDelayMs = 380) {
+    walkthroughStep = step;
+    walkthroughStepSatisfied = false;
+    walkthroughCueVisible = cueDelayMs <= 0;
+    clearWalkthroughCueTimer();
+
+    if (cueDelayMs > 0) {
+      walkthroughCueTimer = setTimeout(() => {
+        walkthroughCueVisible = true;
+        walkthroughCueTimer = null;
+      }, cueDelayMs);
+    }
+  }
+
+  function queueWalkthroughAdvance(
+    next: WalkthroughStep,
+    options?: {
+      holdMs?: number;
+      cueDelayMs?: number;
+      before?: () => void;
+      after?: () => void;
+    },
+  ) {
+    if (!onboardingOpen || walkthroughStepLocked) {
+      return;
+    }
+
+    walkthroughStepLocked = true;
+    options?.before?.();
+    clearWalkthroughAdvanceTimer();
+
+    walkthroughAdvanceTimer = setTimeout(() => {
+      walkthroughAdvanceTimer = null;
+      options?.after?.();
+      walkthroughStepLocked = false;
+      setWalkthroughStep(next, options?.cueDelayMs ?? 340);
+    }, options?.holdMs ?? 620);
   }
 
   function dismissOnboarding(permanently = true) {
     onboardingOpen = false;
-    if (permanently) {
+    walkthroughStepLocked = false;
+    clearWalkthroughCueTimer();
+    clearWalkthroughAdvanceTimer();
+    walkthroughStep = 'intro';
+    walkthroughCueVisible = false;
+
+    if (permanently && walkthroughMode === 'first-run') {
       onboardingDismissed = true;
       persistOnboardingDismissedState(true);
     }
   }
 
-  function startOnboardingGuide() {
-    onboardingDismissed = true;
-    persistOnboardingDismissedState(true);
-    onboardingOpen = false;
-    openComposeLive();
-    if (!composeSessionId.trim()) {
-      composeSessionId = `resonantia-${new Date().toISOString().slice(0, 10)}`;
+  function ensureWalkthroughSessionId() {
+    const seeded = composeSessionId.trim() || calibSessionId.trim() || WALKTHROUGH_SESSION_SEED;
+    composeSessionId = seeded;
+    if (!calibSessionId.trim()) {
+      calibSessionId = seeded;
+    }
+    return seeded;
+  }
+
+  function openWalkthrough(mode: WalkthroughMode) {
+    walkthroughMode = mode;
+    walkthroughStepLocked = false;
+    clearWalkthroughCueTimer();
+    clearWalkthroughAdvanceTimer();
+    closeTelescope();
+    closeTransientUi();
+    syncDetailAutoOpen = false;
+    syncDetailHover = false;
+    onboardingOpen = true;
+    setWalkthroughStep('intro', 0);
+  }
+
+  function handleWalkthroughStart() {
+    if (!onboardingOpen) {
+      return;
+    }
+
+    setWalkthroughStep('settings', 360);
+  }
+
+  function handleWalkthroughNext() {
+    if (!onboardingOpen || walkthroughStepLocked) {
+      return;
+    }
+
+    if (walkthroughStep !== 'intro' && walkthroughStep !== 'complete' && !walkthroughStepSatisfied) {
+      return;
+    }
+
+    switch (walkthroughStep) {
+      case 'settings':
+        queueWalkthroughAdvance('checkin', {
+          holdMs: 220,
+          cueDelayMs: 260,
+          before: () => {
+            settingsOpen = false;
+            menuOpen = false;
+          },
+        });
+        break;
+      case 'checkin':
+        queueWalkthroughAdvance('telescope', {
+          holdMs: 220,
+          cueDelayMs: 260,
+          before: () => {
+            calibrateOpen = false;
+            menuOpen = false;
+          },
+        });
+        break;
+      case 'telescope':
+        queueWalkthroughAdvance('importare', {
+          holdMs: 220,
+          cueDelayMs: 260,
+          before: () => {
+            closeTelescope();
+            menuOpen = false;
+          },
+        });
+        break;
+      case 'importare':
+        queueWalkthroughAdvance('live', {
+          holdMs: 220,
+          cueDelayMs: 260,
+          before: () => {
+            composeModeMenuOpen = false;
+            composeOpen = false;
+          },
+        });
+        break;
+      case 'live':
+        queueWalkthroughAdvance('complete', {
+          holdMs: 220,
+          cueDelayMs: 0,
+          before: () => {
+            composeModeMenuOpen = false;
+            composeOpen = false;
+            closeTelescope();
+            menuOpen = false;
+          },
+        });
+        break;
+      default:
+        break;
     }
   }
 
+  function handleWalkthroughDismiss(event: CustomEvent<{ permanently: boolean }>) {
+    dismissOnboarding(event.detail.permanently);
+  }
+
   function openOnboardingTutorial() {
+    openWalkthrough('demo');
+  }
+
+  function openCinematicDemo() {
     menuOpen = false;
-    settingsOpen = false;
-    onboardingOpen = true;
+    openWalkthrough('demo');
   }
 
   function averageAvecStates(states: Array<{ stability: number; friction: number; logic: number; autonomy: number; psi: number }>) {
@@ -1680,6 +1913,7 @@
   $: localModelOriginWarning = localModelWarningForCurrentOrigin(ollamaBaseUrl);
 
   async function openSettings() {
+    markWalkthroughStepSatisfied('settings');
     menuOpen = false;
     settingsOpen = true;
     settingsLoading = true;
@@ -1997,6 +2231,8 @@
     if (!telescopeCanAccess || telescopeCameraEngaged) {
       return;
     }
+
+    markWalkthroughStepSatisfied('telescope');
 
     closeTransientUi();
     syncDetailAutoOpen = false;
@@ -2339,16 +2575,19 @@
   }
 
   function openComposeLive() {
+    markWalkthroughStepSatisfied('live');
     composeModeMenuOpen = false;
     openCompose('live');
   }
 
   function openComposeImportare() {
+    markWalkthroughStepSatisfied('importare');
     composeModeMenuOpen = false;
     openCompose('importare');
   }
 
   function switchComposeToLive() {
+    markWalkthroughStepSatisfied('live');
     composeMode = 'live';
     composePasteNodeOpen = false;
     composePasteNodeDraft = '';
@@ -2690,6 +2929,7 @@
   }
 
   function openCalibrate() {
+    markWalkthroughStepSatisfied('checkin');
     menuOpen = false;
     calibSessionId = selectedSession?.label ?? '';
     calibError = null;
@@ -2751,10 +2991,12 @@
     cancelAnimationFrame(raf);
     clearSyncDetailTimer();
     clearComposePromptCopiedTimer();
+    clearWalkthroughCueTimer();
+    clearWalkthroughAdvanceTimer();
   });
 </script>
 
-<div class="weaver-root" bind:this={container}>
+<div class="weaver-root" class:walkthrough-compact={walkthroughCompact} bind:this={container}>
   <canvas
     bind:this={canvas}
     on:pointerdown={onPointerDown}
@@ -2852,8 +3094,9 @@
       <div class="menu-wrap">
         <button
           class="nav-btn menu-btn"
+          data-tour-target="menu-toggle"
           class:open={menuOpen}
-          on:click={() => (menuOpen = !menuOpen)}
+          on:click={toggleMenu}
           aria-label="Open menu"
           aria-expanded={menuOpen}
         >
@@ -2862,8 +3105,9 @@
         {#if menuOpen}
           <div class="menu-popover" role="menu" aria-label="Weaver actions">
             <button class="menu-item" on:click={() => { menuOpen = false; loadGraph(); }}>refresh view</button>
-            <button class="menu-item" on:click={openCalibrate}>check in</button>
-            <button class="menu-item" on:click={openSettings}>settings</button>
+            <button class="menu-item" on:click={openCinematicDemo}>run cinematic demo</button>
+            <button class="menu-item" data-tour-target="checkin" on:click={openCalibrate}>check in</button>
+            <button class="menu-item" data-tour-target="settings" on:click={openSettings}>settings</button>
           </div>
         {/if}
       </div>
@@ -2885,32 +3129,24 @@
   <div class="compose-launch" class:faded={telescopeCameraEngaged} class:hidden={composeOpen}>
     {#if composeModeMenuOpen}
       <div class="compose-launch-popover" role="menu" aria-label="compose options">
-        <button class="compose-launch-item" on:click={openComposeLive}>create live</button>
-        <button class="compose-launch-item" on:click={openComposeImportare}>importare</button>
+        <button class="compose-launch-item" data-tour-target="compose-live" on:click={openComposeLive}>create live</button>
+        <button class="compose-launch-item" data-tour-target="compose-importare" on:click={openComposeImportare}>importare</button>
       </div>
     {/if}
-    <button class="compose-btn" class:open={composeModeMenuOpen} on:click={toggleComposeModeMenu}>+ compose</button>
+    <button class="compose-btn" data-tour-target="compose-toggle" class:open={composeModeMenuOpen} on:click={toggleComposeModeMenu}>+ compose</button>
   </div>
 
-  {#if onboardingOpen}
-    <div class="onboarding-overlay" role="dialog" aria-label="quick tutorial">
-      <section class="onboarding-card">
-        <p class="onboarding-kicker">quick tutorial</p>
-        <h2>start your first memory thread</h2>
-        <ol class="onboarding-steps">
-          <li>Open compose and set a session id.</li>
-          <li>Send a message to begin the thread.</li>
-          <li>Use encode + store to save one STTP node.</li>
-          <li>Use sync when you want cloud parity.</li>
-        </ol>
-        <p class="onboarding-note">You can reopen this walkthrough from settings any time.</p>
-        <div class="onboarding-actions">
-          <button class="drawer-btn submit" on:click={startOnboardingGuide}>start guided flow</button>
-          <button class="drawer-btn cancel" on:click={() => dismissOnboarding(true)}>skip for now</button>
-        </div>
-      </section>
-    </div>
-  {/if}
+  <WalkthroughGuide
+    open={onboardingOpen}
+    mode={walkthroughMode}
+    phase={walkthroughStep}
+    cueVisible={walkthroughCueVisible}
+    targetSelector={walkthroughTargetSelector}
+    allowedSelectors={walkthroughAllowedSelectors}
+    on:start={handleWalkthroughStart}
+    on:next={handleWalkthroughNext}
+    on:dismiss={handleWalkthroughDismiss}
+  />
 
   <div class="telescope-shell" aria-label="timeline telescope">
     <button
@@ -2927,6 +3163,7 @@
     </button>
     <button
       class="telescope-icon"
+      data-tour-target="telescope"
       class:hidden={telescopeCameraEngaged || !telescopeCanAccess}
       on:click={openTelescope}
       aria-label="open timeline telescope"
@@ -3131,7 +3368,7 @@
           {/if}
         {:else}
           <span class="compose-utility-divider">•</span>
-          <button class="compose-link-btn" on:click={switchComposeToLive} disabled={composePasteNodeLoading}>switch to create live</button>
+          <button class="compose-link-btn" data-tour-target="compose-switch-live" on:click={switchComposeToLive} disabled={composePasteNodeLoading}>switch to create live</button>
         {/if}
       </div>
       {#if composePromptCopyError}
@@ -3294,7 +3531,7 @@
         on:click={openOnboardingTutorial}
         disabled={settingsLoading || settingsSaving}
       >
-        show quick tutorial
+        run cinematic demo
       </button>
 
       <label class="settings-field">
@@ -4450,73 +4687,6 @@
     line-height: 1.45;
   }
 
-  .onboarding-overlay {
-    position: absolute;
-    inset: 0;
-    z-index: 26;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    background: radial-gradient(circle at 14% 18%, rgba(216, 182, 120, 0.2), transparent 36%),
-      radial-gradient(circle at 84% 82%, rgba(91, 155, 213, 0.17), transparent 40%),
-      rgba(8, 9, 12, 0.8);
-    backdrop-filter: blur(4px);
-  }
-
-  .onboarding-card {
-    width: min(500px, calc(100vw - 28px));
-    max-height: min(78dvh, 560px);
-    overflow: auto;
-    padding: 20px 21px;
-    border-radius: 14px;
-    border: 0.5px solid rgba(255, 255, 255, 0.14);
-    background: linear-gradient(160deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
-    box-shadow: 0 24px 52px rgba(0, 0, 0, 0.45);
-  }
-
-  .onboarding-kicker {
-    margin: 0 0 6px;
-    font-size: 10px;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.5);
-  }
-
-  .onboarding-card h2 {
-    margin: 0;
-    font-family: 'Fraunces', Georgia, serif;
-    font-weight: 400;
-    font-style: italic;
-    font-size: 28px;
-    line-height: 1.14;
-    color: rgba(255, 249, 236, 0.95);
-  }
-
-  .onboarding-steps {
-    margin: 14px 0 10px;
-    padding-left: 18px;
-    display: grid;
-    gap: 8px;
-    color: rgba(255, 255, 255, 0.72);
-    font-size: 11px;
-    line-height: 1.45;
-  }
-
-  .onboarding-note {
-    margin: 0;
-    font-size: 10px;
-    color: rgba(255, 255, 255, 0.44);
-    line-height: 1.4;
-  }
-
-  .onboarding-actions {
-    margin-top: 14px;
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-  }
-
   .slider-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
   .slider-label { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; width: 72px; flex-shrink: 0; }
   .avec-slider  { flex: 1; accent-color: rgba(255,255,255,0.4); height: 2px; }
@@ -4811,24 +4981,6 @@
     .profile-grid,
     .guide-options {
       grid-template-columns: 1fr;
-    }
-
-    .onboarding-overlay {
-      padding: 14px;
-    }
-
-    .onboarding-card {
-      width: 100%;
-      padding: 16px;
-    }
-
-    .onboarding-card h2 {
-      font-size: 24px;
-    }
-
-    .onboarding-actions {
-      flex-direction: column;
-      align-items: stretch;
     }
 
   }
