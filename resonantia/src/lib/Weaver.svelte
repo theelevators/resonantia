@@ -1,7 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { avecColor, avecToRgb, shortLabel, AVEC_HEX, AVEC_COLORS, formatTimestamp } from '@resonantia/core';
+  import { avecColor, avecToRgb, shortLabel, AVEC_HEX, AVEC_COLORS } from '@resonantia/core';
   import CollapseCard from '@resonantia/ui/components/CollapseCard.svelte';
+  import TourActionMenu from './components/TourActionMenu.svelte';
+  import ComposeLauncher from './components/ComposeLauncher.svelte';
+  import ComposeDrawer from './components/ComposeDrawer.svelte';
+  import CalibrateDrawer from './components/CalibrateDrawer.svelte';
+  import SettingsDrawer from './components/SettingsDrawer.svelte';
   import WalkthroughGuide from './components/WalkthroughGuide.svelte';
   import { resonantiaClient } from './resonantiaClient';
   import type {
@@ -229,7 +234,6 @@
     return `rgba(${col.r},${col.g},${col.b},${alpha})`;
   }
 
-  // ── Coordinate helpers ──────────────────────────────────────────
   function activeCamX() {
     return camX + negativeLayerDriftX;
   }
@@ -2733,16 +2737,6 @@
     }
   }
 
-  function composeOutcomeLabel(status: 'created' | 'updated' | 'duplicate' | 'skipped', duplicateSkipped: boolean) {
-    if (duplicateSkipped || status === 'duplicate' || status === 'skipped') {
-      return 'already present · duplicate skipped';
-    }
-    if (status === 'updated') {
-      return 'updated';
-    }
-    return 'stored';
-  }
-
   async function saveComposePastedNode() {
     const rawNode = composePasteNodeDraft.trim();
     if (!rawNode || composePasteNodeLoading || composeLoading || composeReplyLoading) {
@@ -3091,26 +3085,14 @@
           </div>
         {/if}
       </div>
-      <div class="menu-wrap">
-        <button
-          class="nav-btn menu-btn"
-          data-tour-target="menu-toggle"
-          class:open={menuOpen}
-          on:click={toggleMenu}
-          aria-label="Open menu"
-          aria-expanded={menuOpen}
-        >
-          ☰
-        </button>
-        {#if menuOpen}
-          <div class="menu-popover" role="menu" aria-label="Weaver actions">
-            <button class="menu-item" on:click={() => { menuOpen = false; loadGraph(); }}>refresh view</button>
-            <button class="menu-item" on:click={openCinematicDemo}>run cinematic demo</button>
-            <button class="menu-item" data-tour-target="checkin" on:click={openCalibrate}>check in</button>
-            <button class="menu-item" data-tour-target="settings" on:click={openSettings}>settings</button>
-          </div>
-        {/if}
-      </div>
+      <TourActionMenu
+        open={menuOpen}
+        on:toggle={toggleMenu}
+        on:refresh={() => { menuOpen = false; loadGraph(); }}
+        on:demo={openCinematicDemo}
+        on:checkin={openCalibrate}
+        on:settings={openSettings}
+      />
     </div>
   </nav>
 
@@ -3126,15 +3108,14 @@
     on:transmute={transmuteCurrentNode}
   />
 
-  <div class="compose-launch" class:faded={telescopeCameraEngaged} class:hidden={composeOpen}>
-    {#if composeModeMenuOpen}
-      <div class="compose-launch-popover" role="menu" aria-label="compose options">
-        <button class="compose-launch-item" data-tour-target="compose-live" on:click={openComposeLive}>create live</button>
-        <button class="compose-launch-item" data-tour-target="compose-importare" on:click={openComposeImportare}>importare</button>
-      </div>
-    {/if}
-    <button class="compose-btn" data-tour-target="compose-toggle" class:open={composeModeMenuOpen} on:click={toggleComposeModeMenu}>+ compose</button>
-  </div>
+  <ComposeLauncher
+    faded={telescopeCameraEngaged}
+    hidden={composeOpen}
+    menuOpen={composeModeMenuOpen}
+    on:toggle={toggleComposeModeMenu}
+    on:live={openComposeLive}
+    on:importare={openComposeImportare}
+  />
 
   <WalkthroughGuide
     open={onboardingOpen}
@@ -3285,305 +3266,85 @@
     </div>
   </div>
 
-  {#if composeOpen}
-    <div class="drawer drawer-compose" class:importare={composeMode === 'importare'} role="dialog" aria-label={composeMode === 'importare' ? 'Import node' : 'Compose context'}>
-      <div class="drawer-header">
-        <span class="drawer-title">{composeMode === 'importare' ? 'importare' : 'compose'}</span>
-        <button class="close-btn" on:click={() => (composeOpen = false)}>✕</button>
-      </div>
-      <input
-        class="drawer-input"
-        type="text"
-        placeholder="session id (required)"
-        bind:value={composeSessionId}
-        on:input={() => {
-          if (composeError && /session id is required/i.test(composeError) && composeSessionId.trim()) {
-            composeError = null;
-          }
-        }}
-      />
-      {#if composeMode === 'live'}
-        <div class="compose-thread" aria-live="polite">
-          {#if composeMessages.length === 0}
-            <p class="compose-empty">chat first, then encode the thread into one protocol node.</p>
-          {:else}
-            {#each composeMessages as message}
-              <article class={`compose-bubble ${message.role === 'assistant' ? 'assistant' : 'user'}`}>
-                <header class="compose-bubble-meta">
-                  <span>{message.role === 'assistant' ? 'resonare' : 'you'}</span>
-                  <small>{formatTimestamp(message.at)}</small>
-                </header>
-                <p>{message.content}</p>
-              </article>
-            {/each}
-          {/if}
+  <ComposeDrawer
+    open={composeOpen}
+    mode={composeMode}
+    bind:sessionId={composeSessionId}
+    bind:draft={composeDraft}
+    messages={composeMessages}
+    loading={composeLoading}
+    replyLoading={composeReplyLoading}
+    encodePromptSent={composeEncodePromptSent}
+    error={composeError}
+    result={composeResult}
+    promptCopyLoading={composePromptCopyLoading}
+    promptCopied={composePromptCopied}
+    promptCopyError={composePromptCopyError}
+    pasteNodeOpen={composePasteNodeOpen}
+    bind:pasteNodeDraft={composePasteNodeDraft}
+    pasteNodeLoading={composePasteNodeLoading}
+    onClose={() => (composeOpen = false)}
+    onSessionInput={() => {
+      if (composeError && /session id is required/i.test(composeError) && composeSessionId.trim()) {
+        composeError = null;
+      }
+    }}
+    sendComposeMessage={sendComposeMessage}
+    copyComposeEncodePrompt={copyComposeEncodePrompt}
+    toggleComposePasteNode={toggleComposePasteNode}
+    clearComposeConversation={clearComposeConversation}
+    switchComposeToLive={switchComposeToLive}
+    saveComposePastedNode={saveComposePastedNode}
+    submitCompose={submitCompose}
+  />
 
-          {#if composeReplyLoading}
-            <article class="compose-bubble assistant compose-pending">
-              <header class="compose-bubble-meta">
-                <span>resonare</span>
-                <small>thinking…</small>
-              </header>
-            </article>
-          {/if}
-        </div>
+  <CalibrateDrawer
+    open={calibrateOpen}
+    bind:sessionId={calibSessionId}
+    bind:stability={calibStability}
+    bind:friction={calibFriction}
+    bind:logic={calibLogic}
+    bind:autonomy={calibAutonomy}
+    bind:guideOpen
+    guideAnswers={guideAnswers}
+    trigger={calibTrigger}
+    loading={calibLoading}
+    error={calibError}
+    calibrationPsi={calibrationPsi}
+    currentCalibrationVector={currentCalibrationVector}
+    closestCalibrationProfile={closestCalibrationProfile}
+    calibrationProfiles={CALIBRATION_PROFILES}
+    calibrationQuestions={CALIBRATION_QUESTIONS}
+    calibrationSurfaceStyle={calibrationSurfaceStyle}
+    calibrationSpectrumStyle={calibrationSpectrumStyle}
+    calibrationAuraStyle={calibrationAuraStyle}
+    applyCalibrationProfile={applyCalibrationProfile}
+    selectGuideAnswer={selectGuideAnswer}
+    applyCalibrationGuide={applyCalibrationGuide}
+    submitCalibrate={submitCalibrate}
+    onClose={() => (calibrateOpen = false)}
+    onSessionInput={() => {
+      if (calibError && /session id is required/i.test(calibError) && calibSessionId.trim()) {
+        calibError = null;
+      }
+    }}
+  />
 
-        <div class="compose-entry">
-          <textarea
-            class="drawer-textarea compose-input"
-            placeholder="message…"
-            bind:value={composeDraft}
-            rows="3"
-            on:keydown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                void sendComposeMessage();
-              }
-            }}
-          ></textarea>
-          <button
-            class="drawer-btn submit compose-send"
-            on:click={sendComposeMessage}
-            disabled={composeLoading || composeReplyLoading || !composeDraft.trim() || !composeSessionId.trim()}
-          >
-            {composeReplyLoading ? 'thinking…' : 'send'}
-          </button>
-        </div>
-      {:else}
-        <p class="compose-importare-note">paste one complete node and store it directly.</p>
-      {/if}
-
-      <div class="compose-utility-actions">
-        <button class="compose-link-btn" on:click={copyComposeEncodePrompt} disabled={composePromptCopyLoading || composeLoading || composeReplyLoading}>
-          {composePromptCopyLoading ? 'copying distill prompt…' : composePromptCopied ? 'distill prompt copied' : 'copy distill prompt'}
-        </button>
-        {#if composeMode === 'live'}
-          <span class="compose-utility-divider">•</span>
-          <button class="compose-link-btn" on:click={toggleComposePasteNode} disabled={composePasteNodeLoading || composeLoading || composeReplyLoading}>
-            {composePasteNodeOpen ? 'hide paste save' : 'paste node to save'}
-          </button>
-          {#if composeMessages.length > 0}
-            <span class="compose-utility-divider">•</span>
-            <button class="compose-link-btn" on:click={clearComposeConversation} disabled={composeLoading || composeReplyLoading}>clear thread</button>
-          {/if}
-        {:else}
-          <span class="compose-utility-divider">•</span>
-          <button class="compose-link-btn" data-tour-target="compose-switch-live" on:click={switchComposeToLive} disabled={composePasteNodeLoading}>switch to create live</button>
-        {/if}
-      </div>
-      {#if composePromptCopyError}
-        <p class="drawer-error">copy failed: {composePromptCopyError}</p>
-      {/if}
-      {#if composeMode === 'importare' || composePasteNodeOpen}
-        <div class="compose-paste-panel">
-          <p class="compose-paste-intro">paste a complete STTP node and save it directly.</p>
-          <textarea
-            class="drawer-textarea compose-paste-input"
-            placeholder="paste one full STTP node"
-            bind:value={composePasteNodeDraft}
-            rows="9"
-          ></textarea>
-          <div class="compose-paste-actions">
-            {#if composeMode === 'live'}
-              <button class="drawer-btn cancel" on:click={toggleComposePasteNode} disabled={composePasteNodeLoading}>cancel paste</button>
-            {/if}
-            <button class="drawer-btn submit" on:click={saveComposePastedNode} disabled={composePasteNodeLoading || !composePasteNodeDraft.trim() || !composeSessionId.trim()}>
-              {composePasteNodeLoading ? 'saving…' : 'save pasted node'}
-            </button>
-          </div>
-        </div>
-      {/if}
-      {#if composeMode === 'live' && composeLoading && composeEncodePromptSent}
-        <p class="drawer-success compose-encode-note">encoding prompt sent</p>
-      {/if}
-      {#if composeError}<p class="drawer-error">{composeError}</p>{/if}
-      {#if composeResult}
-        <p class="drawer-success">
-          {composeOutcomeLabel(composeResult.status, composeResult.duplicateSkipped)} · Ψ {composeResult.psi.toFixed(4)}
-        </p>
-      {/if}
-      <div class="drawer-actions compose-actions">
-        <button class="drawer-btn cancel" on:click={() => (composeOpen = false)}>{composeMode === 'importare' ? 'close' : 'cancel'}</button>
-        {#if composeMode === 'live'}
-          <button class="drawer-btn submit" on:click={submitCompose} disabled={composeLoading || composeReplyLoading || composeMessages.length === 0 || !composeSessionId.trim()}>
-            {composeLoading ? 'encoding…' : 'encode + store'}
-          </button>
-        {/if}
-      </div>
-    </div>
-  {/if}
-
-  {#if calibrateOpen}
-    <div class="drawer" role="dialog" aria-label="Find your current mode">
-      <div class="drawer-header">
-        <span class="drawer-title">find your current mode</span>
-        <button class="close-btn" on:click={() => (calibrateOpen = false)}>✕</button>
-      </div>
-      <input
-        class="drawer-input"
-        type="text"
-        placeholder="session id (required)"
-        bind:value={calibSessionId}
-        on:input={() => {
-          if (calibError && /session id is required/i.test(calibError) && calibSessionId.trim()) {
-            calibError = null;
-          }
-        }}
-      />
-      <p class="calibration-intro">Pick the mode that feels closest, or answer a few quick questions and adjust it gently below.</p>
-      <section class="calibration-panel" style={calibrationSurfaceStyle(currentCalibrationVector, 1.15)}>
-        <div class="calibration-topline">
-          <span class="calibration-kicker">current mode</span>
-          <span class="calibration-psi">signal {calibrationPsi.toFixed(2)}</span>
-        </div>
-        <div class="calibration-spectrum" style={calibrationSpectrumStyle(currentCalibrationVector)}></div>
-        {#if closestCalibrationProfile}
-          <p class="calibration-profile-name">{closestCalibrationProfile.profile.label}</p>
-          <p class="calibration-profile-blurb">{closestCalibrationProfile.profile.blurb}</p>
-        {/if}
-      </section>
-      <div class="profile-grid">
-        {#each CALIBRATION_PROFILES as profile}
-          <button
-            class="profile-chip"
-            class:selected={closestCalibrationProfile?.profile.id === profile.id}
-            style={calibrationSurfaceStyle(profile.values, closestCalibrationProfile?.profile.id === profile.id ? 1.35 : 0.9)}
-            on:click={() => applyCalibrationProfile(profile)}
-          >
-            <i class="profile-aura" aria-hidden="true" style={calibrationAuraStyle(profile.values)}></i>
-            <span>{profile.label}</span>
-            <small>{profile.blurb}</small>
-          </button>
-        {/each}
-      </div>
-      <div class="guide-actions">
-        <button class="guide-toggle" class:open={guideOpen} on:click={() => (guideOpen = !guideOpen)}>
-          {guideOpen ? 'hide questions' : 'help me find it'}
-        </button>
-        {#if guideOpen}
-          <button class="guide-apply" on:click={applyCalibrationGuide}>use these answers</button>
-        {/if}
-      </div>
-      {#if guideOpen}
-        <section class="guide-panel">
-          {#each CALIBRATION_QUESTIONS as question, questionIndex}
-            <div class="guide-question">
-              <p class="guide-prompt">{question.prompt}</p>
-              <div class="guide-options">
-                {#each question.options as option, optionIndex}
-                  <button
-                    class="guide-option"
-                    class:selected={guideAnswers[questionIndex] === optionIndex}
-                    style={calibrationSurfaceStyle(option.values, guideAnswers[questionIndex] === optionIndex ? 1.15 : 0.72)}
-                    on:click={() => selectGuideAnswer(questionIndex, optionIndex)}
-                  >
-                    <i class="guide-aura" aria-hidden="true" style={calibrationAuraStyle(option.values)}></i>
-                    <span>{option.label}</span>
-                    <small>{option.note}</small>
-                  </button>
-                {/each}
-              </div>
-            </div>
-          {/each}
-        </section>
-      {/if}
-      <p class="calibration-subhead">fine tune</p>
-      <div class="slider-row">
-        <span class="slider-label" style="color:{AVEC_HEX.stability}">grounding</span>
-        <input type="range" min="0" max="1" step="0.01" bind:value={calibStability} class="avec-slider" style="accent-color: {AVEC_HEX.stability};" />
-        <span class="slider-val" style="color:{AVEC_HEX.stability}">{calibStability.toFixed(2)}</span>
-      </div>
-      <div class="slider-row">
-        <span class="slider-label" style="color:{AVEC_HEX.friction}">wear</span>
-        <input type="range" min="0" max="1" step="0.01" bind:value={calibFriction} class="avec-slider" style="accent-color: {AVEC_HEX.friction};" />
-        <span class="slider-val" style="color:{AVEC_HEX.friction}">{calibFriction.toFixed(2)}</span>
-      </div>
-      <div class="slider-row">
-        <span class="slider-label" style="color:{AVEC_HEX.logic}">clarity</span>
-        <input type="range" min="0" max="1" step="0.01" bind:value={calibLogic} class="avec-slider" style="accent-color: {AVEC_HEX.logic};" />
-        <span class="slider-val" style="color:{AVEC_HEX.logic}">{calibLogic.toFixed(2)}</span>
-      </div>
-      <div class="slider-row">
-        <span class="slider-label" style="color:{AVEC_HEX.autonomy}">self-trust</span>
-        <input type="range" min="0" max="1" step="0.01" bind:value={calibAutonomy} class="avec-slider" style="accent-color: {AVEC_HEX.autonomy};" />
-        <span class="slider-val" style="color:{AVEC_HEX.autonomy}">{calibAutonomy.toFixed(2)}</span>
-      </div>
-      <p class="calibration-source">saved from {calibTrigger.replaceAll('_', ' ')}</p>
-      {#if calibError}<p class="drawer-error">{calibError}</p>{/if}
-      <div class="drawer-actions">
-        <button class="drawer-btn cancel" on:click={() => (calibrateOpen = false)}>cancel</button>
-        <button class="drawer-btn submit" on:click={submitCalibrate} disabled={calibLoading || !calibSessionId.trim()}>
-          {calibLoading ? 'saving…' : 'save mode'}
-        </button>
-      </div>
-    </div>
-  {/if}
-
-  {#if settingsOpen}
-    <div class="drawer" role="dialog" aria-label="Settings">
-      <div class="drawer-header">
-        <span class="drawer-title">settings</span>
-        <button class="close-btn" on:click={() => (settingsOpen = false)}>✕</button>
-      </div>
-      <p class="settings-intro">Resonantia runs local-first. Model settings live here, and cloud sync can be linked once in advanced settings.</p>
-      <button
-        class="settings-advanced-toggle"
-        on:click={openOnboardingTutorial}
-        disabled={settingsLoading || settingsSaving}
-      >
-        run cinematic demo
-      </button>
-
-      <label class="settings-field">
-        <span class="settings-label">ollama base url</span>
-        <span class="settings-note">Local model endpoint for transmutation and summaries</span>
-        <input class="drawer-input" type="text" placeholder="http://127.0.0.1:11434" bind:value={ollamaBaseUrl} disabled={settingsLoading || settingsSaving} />
-      </label>
-      {#if localModelOriginWarning}
-        <p class="drawer-error settings-inline-warning">{localModelOriginWarning}</p>
-      {/if}
-
-      <label class="settings-field">
-        <span class="settings-label">ollama model</span>
-        <span class="settings-note">Model name Resonantia should call by default</span>
-        <input class="drawer-input" type="text" placeholder="llama3.2" bind:value={ollamaModel} disabled={settingsLoading || settingsSaving} />
-      </label>
-
-      <button
-        class="settings-advanced-toggle"
-        on:click={() => (syncAdvancedOpen = !syncAdvancedOpen)}
-        disabled={settingsLoading || settingsSaving}
-      >
-        {syncAdvancedOpen ? 'hide advanced sync' : 'advanced sync'}
-      </button>
-
-      {#if syncAdvancedOpen}
-        <div class="settings-advanced-panel">
-          <label class="settings-field">
-            <span class="settings-label">cloud sync path</span>
-            <span class="settings-note">Set this once, then just use Sync from the menu.</span>
-            <input
-              class="drawer-input"
-              type="text"
-              placeholder="https://your-sync-endpoint"
-              bind:value={gatewayBaseUrl}
-              disabled={settingsLoading || settingsSaving}
-            />
-          </label>
-        </div>
-      {/if}
-
-      {#if settingsLoading}<p class="drawer-success">loading config…</p>{/if}
-      {#if settingsError}<p class="drawer-error">{settingsError}</p>{/if}
-      {#if settingsSaved}<p class="drawer-success">settings saved</p>{/if}
-      <div class="drawer-actions">
-        <button class="drawer-btn cancel" on:click={() => (settingsOpen = false)}>cancel</button>
-        <button class="drawer-btn submit" on:click={saveSettings} disabled={settingsLoading || settingsSaving}>
-          {settingsSaving ? 'saving…' : 'save'}
-        </button>
-      </div>
-    </div>
-  {/if}
+  <SettingsDrawer
+    open={settingsOpen}
+    loading={settingsLoading}
+    saving={settingsSaving}
+    error={settingsError}
+    saved={settingsSaved}
+    localModelOriginWarning={localModelOriginWarning}
+    bind:ollamaBaseUrl
+    bind:ollamaModel
+    bind:gatewayBaseUrl
+    bind:syncAdvancedOpen
+    on:close={() => (settingsOpen = false)}
+    on:save={saveSettings}
+    on:demo={openOnboardingTutorial}
+  />
 </div>
 
 <style>
@@ -3917,168 +3678,6 @@
     to { transform: rotate(360deg); }
   }
 
-  .nav-btn {
-    font-family: 'Departure Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    color: rgba(255, 255, 255, 0.3);
-    background: transparent;
-    border: 0.5px solid rgba(255, 255, 255, 0.08);
-    border-radius: 4px;
-    padding: 4px 10px;
-    cursor: pointer;
-    transition: color 0.2s, border-color 0.2s;
-  }
-  .nav-btn:hover {
-    color: rgba(255, 255, 255, 0.75);
-    border-color: rgba(255, 255, 255, 0.2);
-  }
-
-  .menu-wrap {
-    position: relative;
-  }
-
-  .menu-btn {
-    min-width: 36px;
-    padding: 4px 0;
-    text-align: center;
-    font-size: 13px;
-    line-height: 1;
-  }
-
-  .menu-btn.open {
-    color: rgba(255, 255, 255, 0.72);
-    border-color: rgba(255, 255, 255, 0.22);
-  }
-
-  .menu-popover {
-    position: absolute;
-    top: calc(100% + 8px);
-    right: 0;
-    width: 148px;
-    padding: 6px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    background: rgba(10, 11, 14, 0.97);
-    border: 0.5px solid rgba(255, 255, 255, 0.1);
-    border-radius: 10px;
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
-  }
-
-  .menu-item {
-    font-family: 'Departure Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    text-align: left;
-    color: rgba(255, 255, 255, 0.58);
-    background: transparent;
-    border: 0.5px solid transparent;
-    border-radius: 6px;
-    padding: 8px 10px;
-    cursor: pointer;
-    transition: color 0.2s, border-color 0.2s, background 0.2s;
-  }
-
-  .menu-item:hover {
-    color: rgba(255, 255, 255, 0.84);
-    border-color: rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.03);
-  }
-
-  .menu-item:disabled {
-    cursor: default;
-    opacity: 0.5;
-  }
-
-
-  .compose-launch {
-    position: absolute;
-    bottom: max(24px, calc(var(--safe-bottom) + 12px));
-    right: max(24px, calc(var(--safe-right) + 12px));
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 6px;
-    z-index: 10;
-    transition: all 0.2s;
-  }
-
-  .compose-launch.faded {
-    opacity: 0;
-    transform: translateY(8px);
-    pointer-events: none;
-  }
-
-  .compose-launch.hidden {
-    opacity: 0;
-    transform: translateY(8px);
-    pointer-events: none;
-  }
-
-  .compose-launch-popover {
-    width: 146px;
-    padding: 6px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    background: rgba(10, 11, 14, 0.95);
-    border: 0.5px solid rgba(255, 255, 255, 0.12);
-    border-radius: 10px;
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.26);
-  }
-
-  .compose-launch-item {
-    font-family: 'Departure Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    text-transform: lowercase;
-    text-align: left;
-    color: rgba(255, 255, 255, 0.62);
-    background: transparent;
-    border: 0.5px solid transparent;
-    border-radius: 6px;
-    padding: 8px 10px;
-    cursor: pointer;
-    transition: color 0.2s, border-color 0.2s, background 0.2s;
-  }
-
-  .compose-launch-item:hover {
-    color: rgba(255, 255, 255, 0.86);
-    border-color: rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.03);
-  }
-
-  .compose-btn {
-    font-family: 'Departure Mono', monospace;
-    font-size: 11px;
-    letter-spacing: 0.1em;
-    color: rgba(255, 255, 255, 0.6);
-    background: rgba(14, 16, 22, 0.88);
-    border: 0.5px solid rgba(255, 255, 255, 0.14);
-    border-radius: 6px;
-    padding: 10px 18px;
-    cursor: pointer;
-    transition: all 0.2s;
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-  }
-  .compose-btn:hover {
-    color: #fff;
-    border-color: rgba(255, 255, 255, 0.28);
-    background: rgba(20, 23, 32, 0.95);
-  }
-
-  .compose-btn.open {
-    color: rgba(255, 255, 255, 0.86);
-    border-color: rgba(255, 255, 255, 0.3);
-    background: rgba(20, 23, 32, 0.95);
-  }
-
   .telescope-shell {
     position: absolute;
     left: max(20px, calc(var(--safe-left) + 12px));
@@ -4342,570 +3941,6 @@
     text-transform: lowercase;
   }
 
-  .drawer {
-    position: absolute;
-    top: 64px;
-    bottom: 84px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: min(456px, calc(100vw - 32px));
-    max-height: calc(100dvh - 148px);
-    overflow-y: auto;
-    background: rgba(10, 11, 14, 0.97);
-    border: 0.5px solid rgba(255, 255, 255, 0.1);
-    border-radius: 14px;
-    padding: 20px;
-    z-index: 20;
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    font-family: 'Departure Mono', 'Courier New', monospace;
-    overscroll-behavior: contain;
-    scrollbar-width: thin;
-  }
-
-  .drawer-compose {
-    top: max(64px, calc(var(--safe-top) + 46px));
-    bottom: auto;
-    max-height: min(680px, calc(100dvh - 150px));
-  }
-
-  .drawer-compose.importare {
-    max-height: min(620px, calc(100dvh - 160px));
-  }
-
-  .compose-thread {
-    min-height: 144px;
-    max-height: 290px;
-    overflow-y: auto;
-    border: 0.5px solid rgba(255, 255, 255, 0.06);
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.018);
-    padding: 9px;
-    margin-bottom: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-  }
-
-  .compose-empty {
-    margin: auto 0;
-    text-align: center;
-    font-size: 10px;
-    line-height: 1.5;
-    color: rgba(255, 255, 255, 0.34);
-    letter-spacing: 0.03em;
-  }
-
-  .compose-bubble {
-    border: 0.5px solid rgba(255, 255, 255, 0.065);
-    border-radius: 9px;
-    padding: 6px 8px;
-    background: rgba(255, 255, 255, 0.03);
-  }
-
-  .compose-bubble.user {
-    border-color: rgba(255, 255, 255, 0.18);
-    background: rgba(255, 255, 255, 0.06);
-  }
-
-  .compose-bubble.assistant {
-    border-color: rgba(214, 184, 109, 0.26);
-    background: rgba(214, 184, 109, 0.08);
-  }
-
-  .compose-bubble-meta {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 8px;
-    margin-bottom: 5px;
-    font-size: 9px;
-    letter-spacing: 0.08em;
-    text-transform: lowercase;
-    color: rgba(255, 255, 255, 0.5);
-  }
-
-  .compose-bubble-meta small {
-    font-size: 8px;
-    letter-spacing: 0.05em;
-    color: rgba(255, 255, 255, 0.35);
-  }
-
-  .compose-bubble p {
-    margin: 0;
-    font-size: 10px;
-    line-height: 1.45;
-    color: rgba(255, 255, 255, 0.76);
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .compose-pending {
-    animation: composePulse 1.4s ease-in-out infinite;
-  }
-
-  .compose-entry {
-    display: flex;
-    gap: 6px;
-    align-items: flex-end;
-  }
-
-  .compose-input {
-    margin-bottom: 0;
-    min-height: 84px;
-  }
-
-  .compose-send {
-    min-width: 88px;
-    margin-bottom: 1px;
-  }
-
-  .compose-importare-note {
-    margin: 0 0 8px;
-    font-size: 10px;
-    line-height: 1.45;
-    letter-spacing: 0.04em;
-    color: rgba(255, 255, 255, 0.44);
-    text-transform: lowercase;
-  }
-
-  .compose-utility-actions {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    margin-top: 7px;
-    margin-bottom: 2px;
-  }
-
-  .compose-utility-divider {
-    color: rgba(255, 255, 255, 0.18);
-    font-size: 9px;
-    line-height: 1;
-    user-select: none;
-  }
-
-  .compose-link-btn {
-    border: none;
-    background: transparent;
-    padding: 0;
-    margin: 0;
-    font-family: 'Departure Mono', monospace;
-    font-size: 9px;
-    letter-spacing: 0.04em;
-    text-transform: lowercase;
-    color: rgba(255, 255, 255, 0.46);
-    cursor: pointer;
-    transition: color 0.2s;
-  }
-
-  .compose-link-btn:hover:not(:disabled) {
-    color: rgba(255, 255, 255, 0.76);
-  }
-
-  .compose-link-btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-
-  .compose-paste-panel {
-    margin-top: 7px;
-    padding: 10px;
-    border-radius: 10px;
-    border: 0.5px dashed rgba(255, 255, 255, 0.11);
-    background: rgba(255, 255, 255, 0.012);
-  }
-
-  .compose-paste-intro {
-    margin: 0 0 8px;
-    font-size: 9px;
-    line-height: 1.45;
-    letter-spacing: 0.04em;
-    color: rgba(255, 255, 255, 0.48);
-    text-transform: lowercase;
-  }
-
-  .compose-paste-input {
-    min-height: 168px;
-    margin-bottom: 0;
-  }
-
-  .drawer-compose.importare .compose-paste-input {
-    min-height: 224px;
-  }
-
-  .compose-paste-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 8px;
-  }
-
-  .compose-actions {
-    justify-content: flex-end;
-    align-items: center;
-  }
-
-  .compose-encode-note {
-    margin-top: 8px;
-    opacity: 0.85;
-    letter-spacing: 0.04em;
-    text-transform: lowercase;
-  }
-
-  @keyframes composePulse {
-    0%,
-    100% { opacity: 0.64; }
-    50% { opacity: 1; }
-  }
-
-  .drawer-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 14px;
-  }
-
-  .drawer-title {
-    font-family: 'Fraunces', Georgia, serif;
-    font-weight: 300;
-    font-style: italic;
-    font-size: 15px;
-    color: rgba(255, 255, 255, 0.55);
-  }
-
-  .close-btn {
-    background: transparent;
-    border: none;
-    color: rgba(255, 255, 255, 0.3);
-    font-size: 14px;
-    cursor: pointer;
-    padding: 0;
-    transition: color 0.2s;
-  }
-  .close-btn:hover { color: rgba(255, 255, 255, 0.7); }
-
-  .drawer-input {
-    width: 100%; box-sizing: border-box;
-    background: rgba(255, 255, 255, 0.04);
-    border: 0.5px solid rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
-    padding: 8px 10px;
-    color: rgba(255, 255, 255, 0.7);
-    font-family: 'Departure Mono', monospace;
-    font-size: 11px;
-    margin-bottom: 10px;
-    outline: none;
-    transition: border-color 0.2s;
-  }
-  .drawer-input:focus { border-color: rgba(255, 255, 255, 0.25); }
-
-  .drawer-textarea {
-    width: 100%; box-sizing: border-box;
-    background: rgba(255, 255, 255, 0.04);
-    border: 0.5px solid rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
-    padding: 8px 10px;
-    color: rgba(255, 255, 255, 0.7);
-    font-family: 'Departure Mono', monospace;
-    font-size: 11px;
-    resize: vertical;
-    margin-bottom: 10px;
-    outline: none;
-    transition: border-color 0.2s;
-  }
-  .drawer-textarea:focus { border-color: rgba(255, 255, 255, 0.25); }
-
-  .settings-intro {
-    margin: 0 0 14px;
-    font-size: 10px;
-    line-height: 1.55;
-    color: rgba(255, 255, 255, 0.48);
-  }
-
-  .settings-field {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    margin-bottom: 12px;
-  }
-
-  .settings-label {
-    font-size: 9px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.42);
-  }
-
-  .settings-note {
-    font-size: 10px;
-    line-height: 1.45;
-    color: rgba(255, 255, 255, 0.3);
-  }
-
-  .settings-field .drawer-input {
-    margin-bottom: 0;
-  }
-
-  .settings-advanced-toggle {
-    width: 100%;
-    margin: 4px 0 10px;
-    background: rgba(255, 255, 255, 0.02);
-    border: 0.5px dashed rgba(255, 255, 255, 0.16);
-    color: rgba(255, 255, 255, 0.54);
-    border-radius: 8px;
-    padding: 8px 10px;
-    font-family: 'Departure Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    text-transform: lowercase;
-    text-align: left;
-    cursor: pointer;
-    transition: border-color 0.2s, color 0.2s, background 0.2s;
-  }
-
-  .settings-advanced-toggle:hover:not(:disabled) {
-    border-color: rgba(255, 255, 255, 0.26);
-    color: rgba(255, 255, 255, 0.78);
-    background: rgba(255, 255, 255, 0.04);
-  }
-
-  .settings-advanced-toggle:disabled {
-    opacity: 0.55;
-    cursor: default;
-  }
-
-  .settings-advanced-panel {
-    margin-bottom: 10px;
-    padding: 11px;
-    border-radius: 9px;
-    border: 0.5px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.02);
-  }
-
-  .settings-inline-warning {
-    margin: -2px 0 9px;
-    line-height: 1.45;
-  }
-
-  .slider-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-  .slider-label { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; width: 72px; flex-shrink: 0; }
-  .avec-slider  { flex: 1; accent-color: rgba(255,255,255,0.4); height: 2px; }
-  .slider-val   { font-size: 10px; color: rgba(255,255,255,0.4); width: 32px; text-align: right; flex-shrink: 0; }
-
-  .calibration-intro {
-    margin: 0 0 12px;
-    font-size: 10px;
-    line-height: 1.55;
-    color: rgba(255, 255, 255, 0.48);
-  }
-
-  .calibration-subhead {
-    margin: 2px 0 10px;
-    font-size: 9px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.34);
-  }
-
-  .calibration-source {
-    margin: 4px 0 0;
-    font-size: 9px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.32);
-  }
-
-  .calibration-panel {
-    margin-bottom: 12px;
-    padding: 12px 13px 11px;
-    border-radius: 10px;
-    border: 0.5px solid rgba(255, 255, 255, 0.08);
-  }
-
-  .calibration-spectrum {
-    width: 100%;
-    height: 6px;
-    border-radius: 999px;
-    margin-bottom: 10px;
-    opacity: 0.9;
-  }
-
-  .calibration-topline {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 6px;
-  }
-
-  .calibration-kicker,
-  .calibration-psi {
-    font-size: 9px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.38);
-  }
-
-  .calibration-profile-name {
-    margin: 0;
-    font-family: 'Fraunces', Georgia, serif;
-    font-size: 20px;
-    font-style: italic;
-    color: rgba(255, 249, 235, 0.88);
-  }
-
-  .calibration-profile-blurb {
-    margin: 4px 0 0;
-    font-size: 10px;
-    line-height: 1.5;
-    letter-spacing: 0.04em;
-    color: rgba(255, 255, 255, 0.48);
-  }
-
-  .profile-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-
-  .profile-chip,
-  .guide-option,
-  .guide-toggle,
-  .guide-apply {
-    font-family: 'Departure Mono', monospace;
-    cursor: pointer;
-  }
-
-  .profile-chip {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    width: 100%;
-    padding: 9px 10px;
-    text-align: left;
-    border: 0.5px solid rgba(255, 255, 255, 0.08);
-    border-radius: 9px;
-    color: rgba(255, 255, 255, 0.72);
-    transition: background 0.2s, border-color 0.2s, color 0.2s;
-    overflow: hidden;
-  }
-
-  .profile-aura,
-  .guide-aura {
-    display: block;
-    width: 12px;
-    height: 12px;
-    border-radius: 999px;
-    margin-bottom: 3px;
-  }
-
-  .profile-chip span {
-    font-size: 10px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-  }
-
-  .profile-chip small {
-    font-size: 9px;
-    line-height: 1.4;
-    color: rgba(255, 255, 255, 0.42);
-  }
-
-  .profile-chip:hover,
-  .profile-chip.selected {
-    border-color: rgba(214, 184, 109, 0.34);
-    color: rgba(255, 248, 233, 0.92);
-    transform: translateY(-1px);
-  }
-
-  .guide-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-
-  .guide-toggle,
-  .guide-apply {
-    padding: 7px 10px;
-    border-radius: 999px;
-    border: 0.5px solid rgba(255, 255, 255, 0.1);
-    background: rgba(255, 255, 255, 0.03);
-    color: rgba(255, 255, 255, 0.58);
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    transition: background 0.2s, border-color 0.2s, color 0.2s;
-  }
-
-  .guide-toggle.open,
-  .guide-toggle:hover,
-  .guide-apply:hover {
-    background: rgba(255, 255, 255, 0.07);
-    border-color: rgba(255, 255, 255, 0.18);
-    color: rgba(255, 255, 255, 0.82);
-  }
-
-  .guide-panel {
-    margin-bottom: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .guide-question {
-    padding: 10px;
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.025);
-    border: 0.5px solid rgba(255, 255, 255, 0.06);
-  }
-
-  .guide-prompt {
-    margin: 0 0 8px;
-    font-size: 10px;
-    letter-spacing: 0.06em;
-    color: rgba(255, 255, 255, 0.64);
-  }
-
-  .guide-options {
-    display: grid;
-    gap: 6px;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .guide-option {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    width: 100%;
-    padding: 8px 9px;
-    text-align: left;
-    border-radius: 8px;
-    border: 0.5px solid rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.68);
-    transition: background 0.2s, border-color 0.2s, color 0.2s;
-    overflow: hidden;
-  }
-
-  .guide-option span {
-    font-size: 10px;
-    letter-spacing: 0.04em;
-  }
-
-  .guide-option small {
-    font-size: 9px;
-    line-height: 1.35;
-    color: rgba(255, 255, 255, 0.38);
-  }
-
-  .guide-option:hover,
-  .guide-option.selected {
-    border-color: rgba(214, 184, 109, 0.3);
-    color: rgba(255, 248, 233, 0.9);
-  }
-
   @media (max-width: 520px) {
     .telescope-shell {
       left: max(12px, calc(var(--safe-left) + 10px));
@@ -4926,92 +3961,5 @@
       height: 278px;
     }
 
-    .drawer {
-      top: calc(var(--safe-top) + 56px);
-      bottom: max(74px, calc(var(--safe-bottom) + 58px));
-      width: calc(100vw - 20px);
-      max-height: calc(100dvh - 130px);
-      padding: 16px;
-    }
-
-    .drawer-compose {
-      top: calc(var(--safe-top) + 56px);
-      bottom: auto;
-      max-height: min(74dvh, 560px);
-      padding: 14px;
-    }
-
-    .compose-thread {
-      max-height: 236px;
-      min-height: 132px;
-    }
-
-    .compose-entry {
-      flex-direction: column;
-      align-items: stretch;
-      gap: 6px;
-    }
-
-    .compose-send {
-      width: 100%;
-      min-width: 0;
-    }
-
-    .compose-input {
-      min-height: 72px;
-    }
-
-    .compose-utility-actions,
-    .compose-paste-actions {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .compose-link-btn,
-    .compose-paste-actions .drawer-btn {
-      width: 100%;
-      text-align: left;
-      padding: 1px 0;
-    }
-
-    .compose-utility-divider {
-      display: none;
-    }
-
-    .profile-grid,
-    .guide-options {
-      grid-template-columns: 1fr;
-    }
-
   }
-
-  .drawer-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-
-  .drawer-btn {
-    font-family: 'Departure Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    padding: 6px 14px;
-    border-radius: 5px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .drawer-btn.cancel {
-    background: transparent;
-    border: 0.5px solid rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.3);
-  }
-  .drawer-btn.submit {
-    background: rgba(255, 255, 255, 0.06);
-    border: 0.5px solid rgba(255, 255, 255, 0.2);
-    color: rgba(255, 255, 255, 0.8);
-  }
-  .drawer-btn.submit:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: rgba(255, 255, 255, 0.35);
-  }
-  .drawer-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  .drawer-error   { font-size: 10px; color: rgba(233,148,58,0.8);  margin: 6px 0 0; }
-  .drawer-success { font-size: 10px; color: rgba(122,170,122,0.9); margin: 6px 0 0; }
 </style>
