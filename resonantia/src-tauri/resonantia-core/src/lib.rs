@@ -2230,12 +2230,17 @@ pub async fn store_context(
     request: StoreContextRequest,
 ) -> Result<StoreContextResponse, String> {
     let runtime = sttp_runtime_handle(state)?;
-    let session_id = request.session_id.trim();
-    let effective_session_id = if session_id.is_empty() {
-        "resonantia-local"
-    } else {
-        session_id
-    };
+    let effective_session_id = request.session_id.trim();
+    if effective_session_id.is_empty() {
+        return Ok(StoreContextResponse {
+            node_id: String::new(),
+            psi: 0.0,
+            valid: false,
+            validation_error: Some("SessionIdRequired: session_id is required".to_string()),
+            duplicate_skipped: false,
+            upsert_status: None,
+        });
+    }
 
     let validation = runtime.validator.validate(&request.node);
     if !validation.is_valid {
@@ -2280,7 +2285,7 @@ pub async fn store_context(
         });
     };
 
-    normalize_source_metadata_for_surreal(&mut parsed, "local:compose", "resonantia-local");
+    normalize_source_metadata_for_surreal(&mut parsed, "local:compose", effective_session_id);
 
     let psi = parsed.psi;
     let upsert = runtime
@@ -2366,12 +2371,10 @@ pub async fn calibrate_session(
     request: CalibrateSessionRequest,
 ) -> Result<CalibrateSessionResponse, String> {
     let runtime = sttp_runtime_handle(state)?;
-    let session_id = request.session_id.trim();
-    let effective_session_id = if session_id.is_empty() {
-        "resonantia-local"
-    } else {
-        session_id
-    };
+    let effective_session_id = request.session_id.trim();
+    if effective_session_id.is_empty() {
+        return Err("session id is required for calibration".to_string());
+    }
 
     let result = runtime
         .calibration
@@ -2448,12 +2451,10 @@ pub async fn encode_compose(
     state: &AppState,
     request: EncodeComposeRequest,
 ) -> Result<String, String> {
-    let session_id = request.session_id.trim();
-    let effective_session_id = if session_id.is_empty() {
-        "resonantia-local"
-    } else {
-        session_id
-    };
+    let effective_session_id = request.session_id.trim();
+    if effective_session_id.is_empty() {
+        return Err("session id is required for encode".to_string());
+    }
 
     let conversation = normalize_compose_messages(&request.messages, false);
     if conversation.is_empty() {

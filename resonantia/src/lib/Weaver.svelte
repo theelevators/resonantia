@@ -44,6 +44,11 @@
   let lastTransportLabel = '';
   let sessionAvecMap: Record<string, { stability: number; friction: number; logic: number; autonomy: number; psi: number }> = {};
   let nodeAvecMap: Record<string, { stability: number; friction: number; logic: number; autonomy: number; psi: number }> = {};
+  const ONBOARDING_DISMISSED_KEY = 'resonantia:onboarding-dismissed:v1';
+  let onboardingOpen = false;
+  let onboardingDismissed = false;
+  let onboardingHydrated = false;
+  let hasGraphData = false;
 
   const AVEC_DIMS = ['stability', 'friction', 'logic', 'autonomy'] as const;
   type AvecDim = typeof AVEC_DIMS[number];
@@ -313,6 +318,63 @@
     } finally {
       loading = false;
     }
+  }
+
+  function readOnboardingDismissedState(): boolean {
+    if (typeof localStorage === 'undefined') {
+      return false;
+    }
+
+    try {
+      return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  function persistOnboardingDismissedState(value: boolean) {
+    if (typeof localStorage === 'undefined') {
+      return;
+    }
+
+    try {
+      if (value) {
+        localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
+      } else {
+        localStorage.removeItem(ONBOARDING_DISMISSED_KEY);
+      }
+    } catch {
+      // Ignore storage failures in strict/private browser contexts.
+    }
+  }
+
+  $: hasGraphData = Boolean(graph && ((graph.sessions?.length ?? 0) > 0 || (graph.nodes?.length ?? 0) > 0));
+  $: if (onboardingHydrated && !loading && !error && !hasGraphData && !onboardingDismissed) {
+    onboardingOpen = true;
+  }
+
+  function dismissOnboarding(permanently = true) {
+    onboardingOpen = false;
+    if (permanently) {
+      onboardingDismissed = true;
+      persistOnboardingDismissedState(true);
+    }
+  }
+
+  function startOnboardingGuide() {
+    onboardingDismissed = true;
+    persistOnboardingDismissedState(true);
+    onboardingOpen = false;
+    openComposeLive();
+    if (!composeSessionId.trim()) {
+      composeSessionId = `resonantia-${new Date().toISOString().slice(0, 10)}`;
+    }
+  }
+
+  function openOnboardingTutorial() {
+    menuOpen = false;
+    settingsOpen = false;
+    onboardingOpen = true;
   }
 
   function averageAvecStates(states: Array<{ stability: number; friction: number; logic: number; autonomy: number; psi: number }>) {
@@ -1584,6 +1646,38 @@
   let ollamaModel = '';
   let gatewayBaseUrl = '';
   let syncAdvancedOpen = false;
+  let localModelOriginWarning: string | null = null;
+
+  function isLoopbackHostName(hostname: string) {
+    const normalized = hostname.trim().toLowerCase();
+    return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || normalized === '[::1]';
+  }
+
+  function localModelWarningForCurrentOrigin(baseUrl: string): string | null {
+    if (typeof window === 'undefined') {
+      return null;
+    }
+
+    const trimmed = baseUrl.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    try {
+      const target = new URL(trimmed);
+      if (!isLoopbackHostName(target.hostname) || isLoopbackHostName(window.location.hostname)) {
+        return null;
+      }
+
+      const mixedContentBlocked = window.location.protocol === 'https:' && target.protocol === 'http:';
+      const mixedContentNote = mixedContentBlocked ? ' HTTPS pages also block plain-http localhost requests.' : '';
+      return `Hosted origin ${window.location.origin} may not reach local model endpoint ${target.origin} due browser security policy.${mixedContentNote}`;
+    } catch {
+      return null;
+    }
+  }
+
+  $: localModelOriginWarning = localModelWarningForCurrentOrigin(ollamaBaseUrl);
 
   async function openSettings() {
     menuOpen = false;
@@ -2355,6 +2449,12 @@
       return;
     }
 
+    const sessionId = composeSessionId.trim();
+    if (!sessionId) {
+      composeError = 'session id is required';
+      return;
+    }
+
     composeError = null;
     composeResult = null;
 
@@ -2373,7 +2473,7 @@
 
     try {
       const reply = await resonantiaClient.chatCompose({
-        sessionId: composeSessionId.trim() || 'resonantia-local',
+        sessionId,
         messages: composeApiMessages(nextMessages),
       });
 
@@ -2410,12 +2510,17 @@
       return;
     }
 
+    const sessionId = composeSessionId.trim();
+    if (!sessionId) {
+      composeError = 'session id is required';
+      return;
+    }
+
     composePasteNodeLoading = true;
     composeError = null;
     composeResult = null;
 
     try {
-      const sessionId = composeSessionId.trim() || 'resonantia-local';
       const res = await resonantiaClient.storeContext({
         node: rawNode,
         sessionId,
@@ -2467,10 +2572,15 @@
   }
 
   async function submitCompose() {
-    if (composeMessages.length === 0 || composeReplyLoading) return;
+    if (composeLoading || composeMessages.length === 0 || composeReplyLoading) return;
+    const sessionId = composeSessionId.trim();
+    if (!sessionId) {
+      composeError = 'session id is required';
+      return;
+    }
+
     composeLoading = true; composeError = null; composeResult = null; composeEncodePromptSent = false;
     try {
-      const sessionId = composeSessionId.trim() || 'resonantia-local';
       const messages = composeApiMessages(composeMessages);
       const maxEncodeAttempts = 2;
       let parserErrorHint: string | undefined;
@@ -2589,10 +2699,16 @@
   }
 
   async function submitCalibrate() {
+    const sessionId = calibSessionId.trim();
+    if (!sessionId) {
+      calibError = 'session id is required';
+      return;
+    }
+
     calibLoading = true; calibError = null;
     try {
       await resonantiaClient.calibrateSession({
-        sessionId: calibSessionId,
+        sessionId,
         stability: calibStability,
         friction: calibFriction,
         logic: calibLogic,
@@ -2606,6 +2722,8 @@
 
   // ── Lifecycle ─────────────────────────────────────────────────
   onMount(() => {
+    onboardingDismissed = readOnboardingDismissedState();
+    onboardingHydrated = true;
     ctx = canvas.getContext('2d')!;
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
@@ -2774,6 +2892,26 @@
     <button class="compose-btn" class:open={composeModeMenuOpen} on:click={toggleComposeModeMenu}>+ compose</button>
   </div>
 
+  {#if onboardingOpen}
+    <div class="onboarding-overlay" role="dialog" aria-label="quick tutorial">
+      <section class="onboarding-card">
+        <p class="onboarding-kicker">quick tutorial</p>
+        <h2>start your first memory thread</h2>
+        <ol class="onboarding-steps">
+          <li>Open compose and set a session id.</li>
+          <li>Send a message to begin the thread.</li>
+          <li>Use encode + store to save one STTP node.</li>
+          <li>Use sync when you want cloud parity.</li>
+        </ol>
+        <p class="onboarding-note">You can reopen this walkthrough from settings any time.</p>
+        <div class="onboarding-actions">
+          <button class="drawer-btn submit" on:click={startOnboardingGuide}>start guided flow</button>
+          <button class="drawer-btn cancel" on:click={() => dismissOnboarding(true)}>skip for now</button>
+        </div>
+      </section>
+    </div>
+  {/if}
+
   <div class="telescope-shell" aria-label="timeline telescope">
     <button
       class="negative-layer-btn"
@@ -2916,7 +3054,17 @@
         <span class="drawer-title">{composeMode === 'importare' ? 'importare' : 'compose'}</span>
         <button class="close-btn" on:click={() => (composeOpen = false)}>✕</button>
       </div>
-      <input class="drawer-input" type="text" placeholder="session id" bind:value={composeSessionId} />
+      <input
+        class="drawer-input"
+        type="text"
+        placeholder="session id (required)"
+        bind:value={composeSessionId}
+        on:input={() => {
+          if (composeError && /session id is required/i.test(composeError) && composeSessionId.trim()) {
+            composeError = null;
+          }
+        }}
+      />
       {#if composeMode === 'live'}
         <div class="compose-thread" aria-live="polite">
           {#if composeMessages.length === 0}
@@ -2959,7 +3107,7 @@
           <button
             class="drawer-btn submit compose-send"
             on:click={sendComposeMessage}
-            disabled={composeLoading || composeReplyLoading || !composeDraft.trim()}
+            disabled={composeLoading || composeReplyLoading || !composeDraft.trim() || !composeSessionId.trim()}
           >
             {composeReplyLoading ? 'thinking…' : 'send'}
           </button>
@@ -3002,7 +3150,7 @@
             {#if composeMode === 'live'}
               <button class="drawer-btn cancel" on:click={toggleComposePasteNode} disabled={composePasteNodeLoading}>cancel paste</button>
             {/if}
-            <button class="drawer-btn submit" on:click={saveComposePastedNode} disabled={composePasteNodeLoading || !composePasteNodeDraft.trim()}>
+            <button class="drawer-btn submit" on:click={saveComposePastedNode} disabled={composePasteNodeLoading || !composePasteNodeDraft.trim() || !composeSessionId.trim()}>
               {composePasteNodeLoading ? 'saving…' : 'save pasted node'}
             </button>
           </div>
@@ -3020,7 +3168,7 @@
       <div class="drawer-actions compose-actions">
         <button class="drawer-btn cancel" on:click={() => (composeOpen = false)}>{composeMode === 'importare' ? 'close' : 'cancel'}</button>
         {#if composeMode === 'live'}
-          <button class="drawer-btn submit" on:click={submitCompose} disabled={composeLoading || composeReplyLoading || composeMessages.length === 0}>
+          <button class="drawer-btn submit" on:click={submitCompose} disabled={composeLoading || composeReplyLoading || composeMessages.length === 0 || !composeSessionId.trim()}>
             {composeLoading ? 'encoding…' : 'encode + store'}
           </button>
         {/if}
@@ -3034,7 +3182,17 @@
         <span class="drawer-title">find your current mode</span>
         <button class="close-btn" on:click={() => (calibrateOpen = false)}>✕</button>
       </div>
-      <input class="drawer-input" type="text" placeholder="session name or id" bind:value={calibSessionId} />
+      <input
+        class="drawer-input"
+        type="text"
+        placeholder="session id (required)"
+        bind:value={calibSessionId}
+        on:input={() => {
+          if (calibError && /session id is required/i.test(calibError) && calibSessionId.trim()) {
+            calibError = null;
+          }
+        }}
+      />
       <p class="calibration-intro">Pick the mode that feels closest, or answer a few quick questions and adjust it gently below.</p>
       <section class="calibration-panel" style={calibrationSurfaceStyle(currentCalibrationVector, 1.15)}>
         <div class="calibration-topline">
@@ -3117,7 +3275,7 @@
       {#if calibError}<p class="drawer-error">{calibError}</p>{/if}
       <div class="drawer-actions">
         <button class="drawer-btn cancel" on:click={() => (calibrateOpen = false)}>cancel</button>
-        <button class="drawer-btn submit" on:click={submitCalibrate} disabled={calibLoading}>
+        <button class="drawer-btn submit" on:click={submitCalibrate} disabled={calibLoading || !calibSessionId.trim()}>
           {calibLoading ? 'saving…' : 'save mode'}
         </button>
       </div>
@@ -3131,12 +3289,22 @@
         <button class="close-btn" on:click={() => (settingsOpen = false)}>✕</button>
       </div>
       <p class="settings-intro">Resonantia runs local-first. Model settings live here, and cloud sync can be linked once in advanced settings.</p>
+      <button
+        class="settings-advanced-toggle"
+        on:click={openOnboardingTutorial}
+        disabled={settingsLoading || settingsSaving}
+      >
+        show quick tutorial
+      </button>
 
       <label class="settings-field">
         <span class="settings-label">ollama base url</span>
         <span class="settings-note">Local model endpoint for transmutation and summaries</span>
         <input class="drawer-input" type="text" placeholder="http://127.0.0.1:11434" bind:value={ollamaBaseUrl} disabled={settingsLoading || settingsSaving} />
       </label>
+      {#if localModelOriginWarning}
+        <p class="drawer-error settings-inline-warning">{localModelOriginWarning}</p>
+      {/if}
 
       <label class="settings-field">
         <span class="settings-label">ollama model</span>
@@ -4277,6 +4445,78 @@
     background: rgba(255, 255, 255, 0.02);
   }
 
+  .settings-inline-warning {
+    margin: -2px 0 9px;
+    line-height: 1.45;
+  }
+
+  .onboarding-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 26;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: radial-gradient(circle at 14% 18%, rgba(216, 182, 120, 0.2), transparent 36%),
+      radial-gradient(circle at 84% 82%, rgba(91, 155, 213, 0.17), transparent 40%),
+      rgba(8, 9, 12, 0.8);
+    backdrop-filter: blur(4px);
+  }
+
+  .onboarding-card {
+    width: min(500px, calc(100vw - 28px));
+    max-height: min(78dvh, 560px);
+    overflow: auto;
+    padding: 20px 21px;
+    border-radius: 14px;
+    border: 0.5px solid rgba(255, 255, 255, 0.14);
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+    box-shadow: 0 24px 52px rgba(0, 0, 0, 0.45);
+  }
+
+  .onboarding-kicker {
+    margin: 0 0 6px;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  .onboarding-card h2 {
+    margin: 0;
+    font-family: 'Fraunces', Georgia, serif;
+    font-weight: 400;
+    font-style: italic;
+    font-size: 28px;
+    line-height: 1.14;
+    color: rgba(255, 249, 236, 0.95);
+  }
+
+  .onboarding-steps {
+    margin: 14px 0 10px;
+    padding-left: 18px;
+    display: grid;
+    gap: 8px;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 11px;
+    line-height: 1.45;
+  }
+
+  .onboarding-note {
+    margin: 0;
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.44);
+    line-height: 1.4;
+  }
+
+  .onboarding-actions {
+    margin-top: 14px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
   .slider-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
   .slider-label { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; width: 72px; flex-shrink: 0; }
   .avec-slider  { flex: 1; accent-color: rgba(255,255,255,0.4); height: 2px; }
@@ -4571,6 +4811,24 @@
     .profile-grid,
     .guide-options {
       grid-template-columns: 1fr;
+    }
+
+    .onboarding-overlay {
+      padding: 14px;
+    }
+
+    .onboarding-card {
+      width: 100%;
+      padding: 16px;
+    }
+
+    .onboarding-card h2 {
+      font-size: 24px;
+    }
+
+    .onboarding-actions {
+      flex-direction: column;
+      align-items: stretch;
     }
 
   }

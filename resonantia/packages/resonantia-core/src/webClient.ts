@@ -665,6 +665,39 @@ function createCorsHelpError(url: string): Error {
   );
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
+}
+
+function isLoopbackUrl(url: string): boolean {
+  try {
+    return isLoopbackHost(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isHostedBrowserOrigin(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return !isLoopbackHost(window.location.hostname);
+}
+
+function createLocalModelReachabilityError(url: string): Error {
+  const origin = typeof window === "undefined" ? "<app-origin>" : window.location.origin;
+  const mixedContentBlocked = typeof window !== "undefined" && window.location.protocol === "https:" && url.startsWith("http://");
+  const extra = mixedContentBlocked
+    ? " Also note: HTTPS pages block plain-http localhost requests as mixed content."
+    : "";
+
+  return new Error(
+    `local model endpoint ${url} is not reachable from ${origin}. Run the web app locally, use the desktop app for localhost Ollama, or set a reachable remote model endpoint in settings.${extra}`,
+  );
+}
+
 function stableHash(value: string): string {
   let hashA = 2166136261;
   let hashB = 2166136261;
@@ -1286,6 +1319,11 @@ function parseSttpNode(input: StoreContextInput): { node?: NodeDto; error?: stri
     return { error: "ParseFailure: empty node" };
   }
 
+  const requestedSessionId = input.sessionId.trim();
+  if (!requestedSessionId) {
+    return { error: "ParseFailure: session_id is required" };
+  }
+
   if (!raw.includes("\u23e3")) {
     return { error: "ParseFailure: missing STTP node marker" };
   }
@@ -1297,7 +1335,12 @@ function parseSttpNode(input: StoreContextInput): { node?: NodeDto; error?: stri
 
   const tier = tierMatch?.[1]?.trim() ?? "raw";
   const timestamp = timestampMatch?.[1]?.trim() ?? nowIso();
-  const sessionId = sessionMatch?.[1]?.trim() || input.sessionId.trim() || "resonantia-local";
+  const nodeSessionId = sessionMatch?.[1]?.trim();
+  if (nodeSessionId && nodeSessionId !== requestedSessionId) {
+    return { error: `ParseFailure: session_id mismatch (${nodeSessionId} !== ${requestedSessionId})` };
+  }
+
+  const sessionId = nodeSessionId || requestedSessionId;
   const compressionDepth = Number(compressionDepthMatch?.[1] ?? "0");
 
   const userAvec = extractAvec(raw, "user_avec");
@@ -1458,22 +1501,43 @@ async function runOllamaChat(config: AppConfig, messages: ChatMessage[]): Promis
     stream: false,
   };
 
-  const response = await fetch(joinUrl(config.ollamaBaseUrl, "/api/chat"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+  const ollamaUrl = joinUrl(config.ollamaBaseUrl, "/api/chat");
+  const requestUrls = toGatewayRequestUrls(ollamaUrl);
+  let lastError: unknown = null;
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`ollama response status failed: ${response.status} ${body}`.trim());
+  for (const requestUrl of requestUrls) {
+    try {
+      const response = await fetch(requestUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        if (requestUrl.includes(DEV_GATEWAY_PROXY_PATH)) {
+          lastError = new Error(`ollama proxy request failed: ${response.status} ${response.url} ${body}`.trim());
+          continue;
+        }
+
+        throw new Error(`ollama response status failed: ${response.status} ${body}`.trim());
+      }
+
+      const parsed = (await response.json().catch(() => ({}))) as OllamaChatResponse;
+      const text = parsed.message?.content?.trim();
+      return text ? text : null;
+    } catch (error) {
+      lastError = error;
+    }
   }
 
-  const parsed = (await response.json().catch(() => ({}))) as OllamaChatResponse;
-  const text = parsed.message?.content?.trim();
-  return text ? text : null;
+  if (isLoopbackUrl(ollamaUrl) && isHostedBrowserOrigin()) {
+    throw createLocalModelReachabilityError(ollamaUrl);
+  }
+
+  throw new Error(`ollama request failed: ${errorToString(lastError)}`);
 }
 
 function parseAiResponse(text: string): AiSummary | null {
@@ -1807,6 +1871,18 @@ export function createWebResonantiaClient(): ResonantiaClient {
     },
 
     async storeContext(input: StoreContextInput): Promise<StoreContextResponse> {
+      const sessionId = input.sessionId.trim();
+      if (!sessionId) {
+        return {
+          nodeId: "",
+          psi: 0,
+          valid: false,
+          validationError: "SessionIdRequired: session_id is required",
+          duplicateSkipped: false,
+          upsertStatus: undefined,
+        };
+      }
+
       const db = await getDb();
       const parsed = parseSttpNode(input);
       if (!parsed.node) {
@@ -1962,7 +2038,11 @@ export function createWebResonantiaClient(): ResonantiaClient {
 
     async calibrateSession(input: CalibrateSessionInput): Promise<CalibrateSessionResponse> {
       const db = await getDb();
-      const sessionId = input.sessionId.trim() || "resonantia-local";
+      const sessionId = input.sessionId.trim();
+      if (!sessionId) {
+        throw new Error("session id is required for calibration");
+      }
+
       const target = withPsi({
         stability: input.stability,
         friction: input.friction,
@@ -2011,7 +2091,11 @@ export function createWebResonantiaClient(): ResonantiaClient {
     async encodeCompose(request: EncodeComposeRequest): Promise<string> {
       const db = await getDb();
       const config = await readConfig(db);
-      const sessionId = request.sessionId.trim() || "resonantia-local";
+      const sessionId = request.sessionId.trim();
+      if (!sessionId) {
+        throw new Error("session id is required for encode");
+      }
+
       const conversation = normalizeChatMessages(request.messages, { includeSystem: false });
       if (conversation.length === 0) {
         throw new Error("encode requires at least one chat message");
