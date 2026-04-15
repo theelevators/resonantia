@@ -22,6 +22,7 @@ use surrealdb::engine::any::{connect as surreal_connect, Any as SurrealAny};
 use surrealdb::Surreal;
 
 const DEFAULT_GATEWAY_BASE_URL: &str = "";
+const DEFAULT_GATEWAY_AUTH_TOKEN: &str = "";
 const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
 const DEFAULT_OLLAMA_MODEL: &str = "gemma3";
 const TRANSMUTE_PREAMBLE: &str = include_str!("../../../preamble.md");
@@ -133,11 +134,16 @@ impl SyncChangeSource for LocalStoreChangeSource {
 struct GatewayChangeSource {
     http: Client,
     base_url: String,
+    gateway_auth_token: Option<String>,
 }
 
 impl GatewayChangeSource {
-    fn new(http: Client, base_url: String) -> Self {
-        Self { http, base_url }
+    fn new(http: Client, base_url: String, gateway_auth_token: Option<String>) -> Self {
+        Self {
+            http,
+            base_url,
+            gateway_auth_token,
+        }
     }
 
     async fn query_via_list_nodes(
@@ -161,7 +167,17 @@ impl GatewayChangeSource {
             }
         }
 
-        let response = self.http.get(url).send().await?;
+        let mut request = self.http.get(url);
+        if let Some(token) = self
+            .gateway_auth_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            request = request.bearer_auth(token);
+        }
+
+        let response = request.send().await?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -327,6 +343,7 @@ impl SurrealDbClient for SurrealSdkClient {
 pub struct AppState {
     http: Client,
     gateway_base_url: RwLock<String>,
+    gateway_auth_token: RwLock<String>,
     ollama_base_url: RwLock<String>,
     ollama_model: RwLock<String>,
     layout_overrides: RwLock<LayoutOverrides>,
@@ -342,6 +359,7 @@ impl Default for AppState {
         Self {
             http: Client::new(),
             gateway_base_url: RwLock::new(DEFAULT_GATEWAY_BASE_URL.to_string()),
+            gateway_auth_token: RwLock::new(DEFAULT_GATEWAY_AUTH_TOKEN.to_string()),
             ollama_base_url: RwLock::new(DEFAULT_OLLAMA_BASE_URL.to_string()),
             ollama_model: RwLock::new(DEFAULT_OLLAMA_MODEL.to_string()),
             layout_overrides: RwLock::new(LayoutOverrides::default()),
@@ -372,6 +390,8 @@ pub struct LayoutOverrides {
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
     gateway_base_url: String,
+    #[serde(default)]
+    gateway_auth_token: String,
     ollama_base_url: String,
     ollama_model: String,
     #[serde(default)]
@@ -444,6 +464,7 @@ pub struct SyncPullCommandRequest {
     connector_id: String,
     source: Option<String>,
     gateway_base_url: Option<String>,
+    gateway_auth_token: Option<String>,
     page_size: Option<i32>,
     max_batches: Option<i32>,
     min_psi: Option<f32>,
@@ -455,6 +476,7 @@ pub struct SyncPullCommandRequest {
 pub struct SyncNowRequest {
     session_id: Option<String>,
     gateway_base_url: Option<String>,
+    gateway_auth_token: Option<String>,
     page_size: Option<i32>,
     max_batches: Option<i32>,
 }
@@ -1273,6 +1295,31 @@ fn effective_gateway_base_url(state: &AppState, override_base_url: Option<&str>)
         .map(|guard| guard.clone())
 }
 
+fn effective_gateway_auth_token(
+    state: &AppState,
+    override_token: Option<&str>,
+) -> Result<Option<String>, String> {
+    if let Some(value) = override_token {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(Some(trimmed.to_string()));
+        }
+    }
+
+    let token = state
+        .gateway_auth_token
+        .read()
+        .map_err(|err| map_err("failed to read gateway auth token", err))?
+        .trim()
+        .to_string();
+
+    if token.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(token))
+    }
+}
+
 fn json_value_at_alias<'a>(root: &'a Value, aliases: &[&str]) -> Option<&'a Value> {
     aliases.iter().find_map(|key| root.get(*key))
 }
@@ -1328,15 +1375,19 @@ fn is_source_metadata_null_store_failure(message: &str) -> bool {
 async fn store_node_to_gateway(
     http: &Client,
     gateway_base_url: &str,
+    gateway_auth_token: Option<&str>,
     raw_node: &str,
     session_id: &str,
 ) -> Result<GatewayStoreOutcome, String> {
     let url = join_url(gateway_base_url, GATEWAY_STORE_CONTEXT_PATH)?;
     let payload = json!({ "node": raw_node, "sessionId": session_id });
 
-    let response = http
-        .post(&url)
-        .json(&payload)
+    let mut request = http.post(&url).json(&payload);
+    if let Some(token) = gateway_auth_token.map(str::trim).filter(|value| !value.is_empty()) {
+        request = request.bearer_auth(token);
+    }
+
+    let response = request
         .send()
         .await
         .map_err(|err| map_err("gateway store request failed", err))?;
@@ -1380,6 +1431,7 @@ async fn push_local_changes_to_gateway(
     runtime: &SttpRuntime,
     http: &Client,
     gateway_base_url: &str,
+    gateway_auth_token: Option<&str>,
     session_filter: Option<&str>,
     page_size: usize,
     max_batches: usize,
@@ -1411,7 +1463,14 @@ async fn push_local_changes_to_gateway(
                 continue;
             }
 
-            let outcome = store_node_to_gateway(http, gateway_base_url, &node.raw, &node.session_id).await?;
+            let outcome = store_node_to_gateway(
+                http,
+                gateway_base_url,
+                gateway_auth_token,
+                &node.raw,
+                &node.session_id,
+            )
+            .await?;
             if !outcome.valid {
                 summary.rejected += 1;
                 if let Some(error) = outcome.validation_error {
@@ -1522,12 +1581,17 @@ async fn pull_gateway_changes_to_local(
     runtime: &SttpRuntime,
     http: &Client,
     gateway_base_url: &str,
+    gateway_auth_token: Option<String>,
     session_filter: Option<&str>,
     page_size: usize,
     max_batches: usize,
 ) -> Result<SyncDownloadSummary, String> {
     let capped_batches = max_batches.max(1);
-    let source = GatewayChangeSource::new(http.clone(), gateway_base_url.to_string());
+    let source = GatewayChangeSource::new(
+        http.clone(),
+        gateway_base_url.to_string(),
+        gateway_auth_token,
+    );
     let mut summary = SyncDownloadSummary::default();
     let mut cursor: Option<SyncCursor> = None;
 
@@ -1581,6 +1645,7 @@ async fn execute_sync_pull(
         connector_id,
         source,
         gateway_base_url,
+        gateway_auth_token,
         page_size,
         max_batches,
         min_psi,
@@ -1609,8 +1674,13 @@ async fn execute_sync_pull(
         ),
         SyncSourceKind::Gateway => {
             let base_url = effective_gateway_base_url(state, gateway_base_url.as_deref())?;
+            let auth_token = effective_gateway_auth_token(state, gateway_auth_token.as_deref())?;
             (
-                Arc::new(GatewayChangeSource::new(state.http.clone(), base_url)),
+                Arc::new(GatewayChangeSource::new(
+                    state.http.clone(),
+                    base_url,
+                    auth_token,
+                )),
                 "gateway",
             )
         }
@@ -1690,8 +1760,15 @@ fn read_current_config(state: &AppState) -> Result<AppConfig, String> {
         .map_err(|err| map_err("failed to read layout overrides", err))?
         .clone();
 
+    let gateway_auth_token = state
+        .gateway_auth_token
+        .read()
+        .map_err(|err| map_err("failed to read gateway auth token", err))?
+        .clone();
+
     Ok(AppConfig {
         gateway_base_url,
+        gateway_auth_token,
         ollama_base_url,
         ollama_model,
         layout_overrides,
@@ -1745,6 +1822,14 @@ fn load_persisted_config(state: &AppState) -> Result<(), String> {
             .write()
             .map_err(|err| map_err("failed to restore gateway url", err))?;
         *guard = config.gateway_base_url;
+    }
+
+    {
+        let mut guard = state
+            .gateway_auth_token
+            .write()
+            .map_err(|err| map_err("failed to restore gateway auth token", err))?;
+        *guard = config.gateway_auth_token;
     }
 
     {
@@ -2202,6 +2287,19 @@ pub fn set_gateway_base_url(state: &AppState, base_url: String) -> Result<(), St
     Ok(())
 }
 
+pub fn set_gateway_auth_token(state: &AppState, token: String) -> Result<(), String> {
+    {
+        let mut guard = state
+            .gateway_auth_token
+            .write()
+            .map_err(|err| map_err("failed to update gateway auth token", err))?;
+        *guard = token.trim().to_string();
+    }
+
+    persist_current_config(state)?;
+    Ok(())
+}
+
 pub fn set_ollama_config(
     state: &AppState,
     base_url: Option<String>,
@@ -2375,6 +2473,7 @@ pub async fn sync_now(
     let session_scope = session_filter.unwrap_or("all").to_string();
 
     let gateway_base_url = effective_gateway_base_url(state, request.gateway_base_url.as_deref())?;
+    let gateway_auth_token = effective_gateway_auth_token(state, request.gateway_auth_token.as_deref())?;
     if gateway_base_url.trim().is_empty() {
         return Err(
             "cloud sync path not set. open settings -> advanced sync once, then sync is one-click."
@@ -2392,6 +2491,7 @@ pub async fn sync_now(
         &runtime,
         &state.http,
         &gateway_base_url,
+        gateway_auth_token.as_deref(),
         session_filter,
         page_size,
         max_batches,
@@ -2402,6 +2502,7 @@ pub async fn sync_now(
         &runtime,
         &state.http,
         &gateway_base_url,
+        gateway_auth_token,
         session_filter,
         page_size,
         max_batches,

@@ -27,6 +27,7 @@ export interface LayoutOverrides {
 
 export interface AppConfig {
   gatewayBaseUrl: string;
+  gatewayAuthToken: string;
   ollamaBaseUrl: string;
   ollamaModel: string;
   layoutOverrides: LayoutOverrides;
@@ -35,6 +36,7 @@ export interface AppConfig {
 export interface SyncNowRequest {
   sessionId?: string;
   gatewayBaseUrl?: string;
+  gatewayAuthToken?: string;
   pageSize?: number;
   maxBatches?: number;
 }
@@ -77,6 +79,7 @@ export interface SyncPullRequest {
   connectorId: string;
   source?: string;
   gatewayBaseUrl?: string;
+  gatewayAuthToken?: string;
   pageSize?: number;
   maxBatches?: number;
   minPsi?: number;
@@ -105,6 +108,7 @@ export interface ResonantiaClient {
   summarizeNode(rawNode: string): Promise<AiSummary | null>;
   setOllamaConfig(baseUrl?: string, model?: string): Promise<void>;
   setGatewayBaseUrl(baseUrl: string): Promise<void>;
+  setGatewayAuthToken(token: string): Promise<void>;
 }
 
 export function createResonantiaClient(invokeCommand: CommandInvoker): ResonantiaClient {
@@ -168,6 +172,10 @@ export function createResonantiaClient(invokeCommand: CommandInvoker): Resonanti
     setGatewayBaseUrl: (baseUrl) =>
       invokeCommand<void>("set_gateway_base_url", {
         baseUrl,
+      }),
+    setGatewayAuthToken: (token) =>
+      invokeCommand<void>("set_gateway_auth_token", {
+        token,
       }),
   };
 }

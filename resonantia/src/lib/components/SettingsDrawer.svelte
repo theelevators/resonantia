@@ -10,6 +10,7 @@
   export let ollamaBaseUrl = '';
   export let ollamaModel = '';
   export let gatewayBaseUrl = '';
+  export let gatewayAuthToken = '';
   export let syncAdvancedOpen = false;
 
   const dispatch = createEventDispatcher<{
@@ -68,6 +69,19 @@
             placeholder="https://your-sync-endpoint"
             bind:value={gatewayBaseUrl}
             disabled={loading || saving}
+          />
+        </label>
+
+        <label class="settings-field">
+          <span class="settings-label">cloud auth bearer</span>
+          <span class="settings-note">Optional for local/self-hosted. Required when gateway runs in Clerk auth mode.</span>
+          <input
+            class="drawer-input"
+            type="password"
+            placeholder="paste clerk session jwt"
+            bind:value={gatewayAuthToken}
+            disabled={loading || saving}
+            autocomplete="off"
           />
         </label>
       </div>

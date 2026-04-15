@@ -2017,6 +2017,7 @@
   let ollamaBaseUrl = '';
   let ollamaModel = '';
   let gatewayBaseUrl = '';
+  let gatewayAuthToken = '';
   let syncAdvancedOpen = false;
   let localModelOriginWarning: string | null = null;
 
@@ -2062,6 +2063,7 @@
     try {
       const config = await resonantiaClient.getConfig();
       gatewayBaseUrl = config.gatewayBaseUrl ?? '';
+      gatewayAuthToken = config.gatewayAuthToken ?? '';
       ollamaBaseUrl = config.ollamaBaseUrl;
       ollamaModel = config.ollamaModel;
       syncAdvancedOpen = false;
@@ -2080,6 +2082,7 @@
     try {
       await resonantiaClient.setOllamaConfig(ollamaBaseUrl.trim(), ollamaModel.trim());
       await resonantiaClient.setGatewayBaseUrl(gatewayBaseUrl.trim());
+      await resonantiaClient.setGatewayAuthToken(gatewayAuthToken.trim());
 
       settingsSaved = true;
       await checkHealth();
@@ -3606,6 +3609,7 @@
     bind:ollamaBaseUrl
     bind:ollamaModel
     bind:gatewayBaseUrl
+    bind:gatewayAuthToken
     bind:syncAdvancedOpen
     on:close={() => (settingsOpen = false)}
     on:save={saveSettings}

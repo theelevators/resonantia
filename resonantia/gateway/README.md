@@ -14,9 +14,14 @@ This first scaffold provides:
 - Tenant-isolated storage roots under `gateway-data/tenants/<tenant-id>`
 - CORS configured for `https://app.resonantia.me` by default
 
-## Tenant Model
+## Tenant + Auth Model
 
-For now, tenant selection is header-based:
+Gateway now supports two auth modes:
+
+- `off` (default): header-based tenant selection
+- `clerk`: tenant derived from verified Clerk JWT claims
+
+When `RESONANTIA_GATEWAY_AUTH_MODE=off`, tenant selection is header-based:
 
 - `x-resonantia-tenant`
 - `x-tenant-id`
@@ -24,7 +29,11 @@ For now, tenant selection is header-based:
 
 If no tenant header is sent, the gateway falls back to `public`.
 
-This is intentional scaffolding, not final auth. The next step is to resolve tenant identity from a signed bearer token instead of trusting raw headers.
+When `RESONANTIA_GATEWAY_AUTH_MODE=clerk`:
+
+- `Authorization: Bearer <jwt>` is required
+- Token is verified against Clerk JWKS
+- Tenant resolves from the configured claim (default: `org_id`), then falls back to `sub`
 
 ## Environment Variables
 
@@ -37,6 +46,27 @@ This is intentional scaffolding, not final auth. The next step is to resolve ten
 - `RESONANTIA_GATEWAY_ALLOWED_ORIGINS`
   - default: `https://app.resonantia.me`
   - comma-separated list
+- `RESONANTIA_GATEWAY_AUTH_MODE`
+  - default: `off`
+  - values: `off`, `clerk`
+- `RESONANTIA_GATEWAY_CLERK_ISSUER`
+  - required when auth mode is `clerk`
+  - example: `https://clerk.your-domain.com`
+- `RESONANTIA_GATEWAY_CLERK_JWKS_URL`
+  - optional
+  - default: `<issuer>/.well-known/jwks.json`
+- `RESONANTIA_GATEWAY_CLERK_AUDIENCE`
+  - optional audience validation
+- `RESONANTIA_GATEWAY_CLERK_TENANT_CLAIM`
+  - optional
+  - default: `org_id`
+- `RESONANTIA_GATEWAY_CLERK_JWKS_CACHE_SECONDS`
+  - optional
+  - default: `300`
+- `RESONANTIA_GATEWAY_ALLOW_TENANT_HEADER_FALLBACK`
+  - optional
+  - default: `false`
+  - allows header tenant fallback in clerk mode if token does not carry tenant claim
 
 ## Run
 
@@ -54,7 +84,7 @@ cargo run --manifest-path gateway/Cargo.toml
 
 ## Near-Term Next Steps
 
-1. Replace header-based tenant selection with bearer-token auth.
+1. Add explicit allowlist validation for tenant claim format and issuer/audience presets per environment.
 2. Add `POST /api/v1/sync` once the hosted sync contract is finalized.
 3. Add rate limiting, audit logs, and request IDs.
 4. Add managed SurrealDB configuration instead of local per-tenant data dirs.

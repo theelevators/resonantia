@@ -49,4 +49,5 @@ export const resonantiaClient: ResonantiaClient = {
   summarizeNode: (rawNode) => withClient((client) => client.summarizeNode(rawNode)),
   setOllamaConfig: (baseUrl, model) => withClient((client) => client.setOllamaConfig(baseUrl, model)),
   setGatewayBaseUrl: (baseUrl) => withClient((client) => client.setGatewayBaseUrl(baseUrl)),
+  setGatewayAuthToken: (token) => withClient((client) => client.setGatewayAuthToken(token)),
 };

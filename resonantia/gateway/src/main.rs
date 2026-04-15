@@ -3,18 +3,21 @@ use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use resonantia_core::{
     create_app_state, get_health, get_graph, initialize_app_state, list_nodes, store_context,
     AppState, GraphResponse, HealthResponse, ListNodesResponse, StoreContextRequest,
     StoreContextResponse,
 };
 use serde::Deserialize;
+use serde_json::Value;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
@@ -24,6 +27,7 @@ use tokio::sync::RwLock;
 #[derive(Clone)]
 struct GatewayContext {
     tenant_pool: Arc<TenantPool>,
+    auth: Arc<AuthResolver>,
 }
 
 struct TenantPool {
@@ -42,6 +46,47 @@ struct ListNodesQuery {
 #[derive(Clone)]
 struct TenantRequestContext {
     state: Arc<AppState>,
+}
+
+enum GatewayAuthMode {
+    Off,
+    Clerk(ClerkAuth),
+}
+
+struct AuthResolver {
+    mode: GatewayAuthMode,
+}
+
+struct ClerkAuth {
+    issuer: String,
+    audience: Option<String>,
+    tenant_claim: String,
+    allow_tenant_header_fallback: bool,
+    jwks_url: String,
+    jwks_cache_ttl: Duration,
+    http: reqwest::Client,
+    jwks_cache: RwLock<Option<CachedJwks>>,
+}
+
+struct CachedJwks {
+    fetched_at: Instant,
+    keys: Vec<Jwk>,
+}
+
+#[derive(Deserialize)]
+struct JwksResponse {
+    keys: Vec<Jwk>,
+}
+
+#[derive(Clone, Deserialize)]
+struct Jwk {
+    kid: Option<String>,
+    kty: String,
+    n: String,
+    e: String,
+    alg: Option<String>,
+    #[serde(rename = "use")]
+    use_field: Option<String>,
 }
 
 #[tokio::main]
@@ -66,6 +111,7 @@ async fn main() {
             default_tenant,
             states: RwLock::new(HashMap::new()),
         }),
+        auth: Arc::new(AuthResolver::from_env().expect("invalid gateway auth configuration")),
     };
 
     let app = Router::new()
@@ -152,8 +198,10 @@ async fn resolve_tenant_context(
     context: &GatewayContext,
     headers: &HeaderMap,
 ) -> Result<TenantRequestContext, AppError> {
-    let tenant_id = tenant_id_from_headers(headers)
-        .unwrap_or_else(|| context.tenant_pool.default_tenant.clone());
+    let tenant_id = context
+        .auth
+        .resolve_tenant_id(headers, &context.tenant_pool.default_tenant)
+        .await?;
     let state = context
         .tenant_pool
         .state_for(&tenant_id)
@@ -197,6 +245,263 @@ fn sanitize_tenant_id(input: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+fn env_flag(name: &str, default: bool) -> bool {
+    match env::var(name) {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => default,
+    }
+}
+
+impl AuthResolver {
+    fn from_env() -> Result<Self, String> {
+        let mode = env::var("RESONANTIA_GATEWAY_AUTH_MODE")
+            .unwrap_or_else(|_| "off".to_string())
+            .trim()
+            .to_ascii_lowercase();
+
+        if mode.is_empty() || mode == "off" {
+            info!("gateway auth mode: off (header/default tenant mode)");
+            return Ok(Self {
+                mode: GatewayAuthMode::Off,
+            });
+        }
+
+        if mode != "clerk" {
+            return Err(format!(
+                "unsupported RESONANTIA_GATEWAY_AUTH_MODE: {mode} (expected off|clerk)"
+            ));
+        }
+
+        let issuer = env::var("RESONANTIA_GATEWAY_CLERK_ISSUER")
+            .map_err(|_| "RESONANTIA_GATEWAY_CLERK_ISSUER is required when auth mode is clerk".to_string())?
+            .trim()
+            .trim_end_matches('/')
+            .to_string();
+        if issuer.is_empty() {
+            return Err("RESONANTIA_GATEWAY_CLERK_ISSUER cannot be empty".to_string());
+        }
+
+        let audience = env::var("RESONANTIA_GATEWAY_CLERK_AUDIENCE")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        let jwks_url = env::var("RESONANTIA_GATEWAY_CLERK_JWKS_URL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| format!("{issuer}/.well-known/jwks.json"));
+
+        let tenant_claim = env::var("RESONANTIA_GATEWAY_CLERK_TENANT_CLAIM")
+            .unwrap_or_else(|_| "org_id".to_string())
+            .trim()
+            .to_string();
+        if tenant_claim.is_empty() {
+            return Err("RESONANTIA_GATEWAY_CLERK_TENANT_CLAIM cannot be empty".to_string());
+        }
+
+        let jwks_ttl_seconds = env::var("RESONANTIA_GATEWAY_CLERK_JWKS_CACHE_SECONDS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(300);
+
+        let allow_tenant_header_fallback =
+            env_flag("RESONANTIA_GATEWAY_ALLOW_TENANT_HEADER_FALLBACK", false);
+
+        info!(
+            %issuer,
+            %jwks_url,
+            tenant_claim = %tenant_claim,
+            "gateway auth mode: clerk"
+        );
+
+        Ok(Self {
+            mode: GatewayAuthMode::Clerk(ClerkAuth {
+                issuer,
+                audience,
+                tenant_claim,
+                allow_tenant_header_fallback,
+                jwks_url,
+                jwks_cache_ttl: Duration::from_secs(jwks_ttl_seconds.max(15)),
+                http: reqwest::Client::new(),
+                jwks_cache: RwLock::new(None),
+            }),
+        })
+    }
+
+    async fn resolve_tenant_id(
+        &self,
+        headers: &HeaderMap,
+        default_tenant: &str,
+    ) -> Result<String, AppError> {
+        match &self.mode {
+            GatewayAuthMode::Off => Ok(tenant_id_from_headers(headers)
+                .unwrap_or_else(|| sanitize_tenant_id(default_tenant))),
+            GatewayAuthMode::Clerk(clerk) => clerk.resolve_tenant_id(headers).await,
+        }
+    }
+}
+
+impl ClerkAuth {
+    async fn resolve_tenant_id(&self, headers: &HeaderMap) -> Result<String, AppError> {
+        let token = bearer_token_from_headers(headers)
+            .ok_or_else(|| AppError::unauthorized("missing bearer token".to_string()))?;
+
+        let claims = self.verify_token(token).await?;
+
+        if let Some(tenant) = claim_string(&claims, &self.tenant_claim) {
+            let sanitized = sanitize_tenant_id(&tenant);
+            if sanitized != "public" {
+                return Ok(sanitized);
+            }
+        }
+
+        if let Some(sub) = claim_string(&claims, "sub") {
+            let sanitized = sanitize_tenant_id(&sub);
+            if sanitized != "public" {
+                return Ok(sanitized);
+            }
+        }
+
+        if self.allow_tenant_header_fallback {
+            if let Some(tenant) = tenant_id_from_headers(headers) {
+                return Ok(tenant);
+            }
+        }
+
+        Err(AppError::unauthorized(
+            "token did not include a usable tenant claim".to_string(),
+        ))
+    }
+
+    async fn verify_token(&self, token: &str) -> Result<Value, AppError> {
+        let header = decode_header(token)
+            .map_err(|err| AppError::unauthorized(format!("invalid token header: {err}")))?;
+
+        if header.alg != Algorithm::RS256 {
+            return Err(AppError::unauthorized(
+                "unsupported token algorithm; expected RS256".to_string(),
+            ));
+        }
+
+        let kid = header
+            .kid
+            .ok_or_else(|| AppError::unauthorized("token missing kid".to_string()))?;
+        let jwk = self
+            .jwk_for_kid(&kid)
+            .await
+            .map_err(AppError::unauthorized)?;
+
+        let decoding_key = DecodingKey::from_rsa_components(&jwk.n, &jwk.e)
+            .map_err(|err| AppError::unauthorized(format!("invalid jwk key material: {err}")))?;
+
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.set_issuer(&[self.issuer.as_str()]);
+        if let Some(audience) = &self.audience {
+            validation.set_audience(&[audience.as_str()]);
+        }
+
+        let data = decode::<Value>(token, &decoding_key, &validation)
+            .map_err(|err| AppError::unauthorized(format!("token verification failed: {err}")))?;
+
+        Ok(data.claims)
+    }
+
+    async fn jwk_for_kid(&self, kid: &str) -> Result<Jwk, String> {
+        if let Some(key) = self.find_cached_jwk(kid).await {
+            return Ok(key);
+        }
+
+        let fetched = self.fetch_jwks().await?;
+        fetched
+            .into_iter()
+            .find(|key| {
+                key.kid.as_deref() == Some(kid)
+                    && key.kty.eq_ignore_ascii_case("rsa")
+                    && key.alg
+                        .as_deref()
+                        .map(|value| value.eq_ignore_ascii_case("rs256"))
+                        .unwrap_or(true)
+                    && key
+                        .use_field
+                        .as_deref()
+                        .map(|value| value.eq_ignore_ascii_case("sig"))
+                        .unwrap_or(true)
+            })
+            .ok_or_else(|| format!("no JWK found for kid={kid}"))
+    }
+
+    async fn find_cached_jwk(&self, kid: &str) -> Option<Jwk> {
+        let guard = self.jwks_cache.read().await;
+        let cache = guard.as_ref()?;
+        if cache.fetched_at.elapsed() > self.jwks_cache_ttl {
+            return None;
+        }
+
+        cache
+            .keys
+            .iter()
+            .find(|key| key.kid.as_deref() == Some(kid))
+            .cloned()
+    }
+
+    async fn fetch_jwks(&self) -> Result<Vec<Jwk>, String> {
+        let response = self
+            .http
+            .get(&self.jwks_url)
+            .send()
+            .await
+            .map_err(|err| format!("failed to fetch JWKS: {err}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("failed to fetch JWKS: {status} {body}"));
+        }
+
+        let payload = response
+            .json::<JwksResponse>()
+            .await
+            .map_err(|err| format!("failed to parse JWKS payload: {err}"))?;
+
+        {
+            let mut guard = self.jwks_cache.write().await;
+            *guard = Some(CachedJwks {
+                fetched_at: Instant::now(),
+                keys: payload.keys.clone(),
+            });
+        }
+
+        Ok(payload.keys)
+    }
+}
+
+fn bearer_token_from_headers(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get("authorization")?.to_str().ok()?.trim();
+    let (scheme, token) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn claim_string(claims: &Value, key: &str) -> Option<String> {
+    claims
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 impl TenantPool {
@@ -293,6 +598,13 @@ impl AppError {
     fn internal(message: String) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
+            message,
+        }
+    }
+
+    fn unauthorized(message: String) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
             message,
         }
     }

@@ -51,6 +51,7 @@ const NODE_CACHE_STORAGE_KEY = "resonantia:nodes-cache:v1";
 const NODE_CACHE_LIMIT = 1200;
 
 const DEFAULT_GATEWAY_BASE_URL = "";
+const DEFAULT_GATEWAY_AUTH_TOKEN = "";
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 const DEFAULT_OLLAMA_MODEL = "gemma3";
 const TRANSMUTE_PREAMBLE = transmutePreambleRaw.trim();
@@ -123,6 +124,7 @@ const TABLE_CALIBRATION = "calibration_state";
 
 const DEFAULT_CONFIG: AppConfig = {
   gatewayBaseUrl: DEFAULT_GATEWAY_BASE_URL,
+  gatewayAuthToken: DEFAULT_GATEWAY_AUTH_TOKEN,
   ollamaBaseUrl: DEFAULT_OLLAMA_BASE_URL,
   ollamaModel: DEFAULT_OLLAMA_MODEL,
   layoutOverrides: {
@@ -517,6 +519,10 @@ function normalizeGatewayBaseUrl(baseUrl: string): string {
   }
 }
 
+function normalizeGatewayAuthToken(token: string): string {
+  return token.trim();
+}
+
 function gatewayPathsFor(baseUrl: string, paths: string[]): string[] {
   const normalizedBase = normalizeGatewayBaseUrl(baseUrl);
   return paths.map((path) => joinUrl(normalizedBase, path));
@@ -607,6 +613,7 @@ function mergeNodesBySyncKey(...groups: NodeDto[][]): NodeDto[] {
 function defaultConfig(): AppConfig {
   return {
     gatewayBaseUrl: DEFAULT_GATEWAY_BASE_URL,
+    gatewayAuthToken: DEFAULT_GATEWAY_AUTH_TOKEN,
     ollamaBaseUrl: DEFAULT_OLLAMA_BASE_URL,
     ollamaModel: DEFAULT_OLLAMA_MODEL,
     layoutOverrides: {
@@ -948,9 +955,11 @@ function normalizeConfig(input: unknown): AppConfig {
   const record = asRecord(input);
   const layoutOverrides = readObject(record, "layoutOverrides", "layout_overrides");
   const gatewayRaw = readString(record, "gatewayBaseUrl", "gateway_base_url") || DEFAULT_GATEWAY_BASE_URL;
+  const gatewayAuthRaw = readString(record, "gatewayAuthToken", "gateway_auth_token") || DEFAULT_GATEWAY_AUTH_TOKEN;
 
   return {
     gatewayBaseUrl: normalizeGatewayBaseUrl(gatewayRaw),
+    gatewayAuthToken: normalizeGatewayAuthToken(gatewayAuthRaw),
     ollamaBaseUrl: readString(record, "ollamaBaseUrl", "ollama_base_url") || DEFAULT_OLLAMA_BASE_URL,
     ollamaModel: readString(record, "ollamaModel", "ollama_model") || DEFAULT_OLLAMA_MODEL,
     layoutOverrides: {
@@ -1678,13 +1687,25 @@ async function fetchGatewayWithFallback(urls: string[], init?: RequestInit): Pro
   throw new Error(`gateway request failed: ${errorToString(lastError)}`);
 }
 
-async function storeNodeToGateway(baseUrl: string, node: NodeDto): Promise<GatewayStoreOutcome> {
+function createGatewayHeaders(authToken?: string, includeJson = false): HeadersInit {
+  const headers: Record<string, string> = {};
+  if (includeJson) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  const token = normalizeGatewayAuthToken(authToken ?? "");
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  return headers;
+}
+
+async function storeNodeToGateway(baseUrl: string, node: NodeDto, authToken?: string): Promise<GatewayStoreOutcome> {
   const urls = gatewayPathsFor(baseUrl, GATEWAY_STORE_PATHS);
   const response = await fetchGatewayWithFallback(urls, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: createGatewayHeaders(authToken, true),
     body: JSON.stringify({
       node: node.raw,
       sessionId: node.sessionId,
@@ -1704,7 +1725,7 @@ function toGatewayNode(value: unknown): NodeDto | null {
   return toNodeDto(value);
 }
 
-async function fetchGatewayNodes(baseUrl: string, sessionId?: string): Promise<NodeDto[]> {
+async function fetchGatewayNodes(baseUrl: string, sessionId?: string, authToken?: string): Promise<NodeDto[]> {
   const urls = gatewayPathsFor(baseUrl, GATEWAY_NODES_PATHS).map((candidate) => {
     const url = new URL(candidate);
     url.searchParams.set("limit", "5000");
@@ -1715,7 +1736,9 @@ async function fetchGatewayNodes(baseUrl: string, sessionId?: string): Promise<N
     return url.toString();
   });
 
-  const response = await fetchGatewayWithFallback(urls);
+  const response = await fetchGatewayWithFallback(urls, {
+    headers: createGatewayHeaders(authToken),
+  });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
     throw new Error(`gateway list nodes failed: ${response.status} ${response.url} ${body}`.trim());
@@ -1934,6 +1957,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
       const synced = await this.syncNow({
         sessionId: request.sessionId,
         gatewayBaseUrl: request.gatewayBaseUrl,
+        gatewayAuthToken: request.gatewayAuthToken,
         pageSize: request.pageSize,
         maxBatches: request.maxBatches,
       });
@@ -1957,6 +1981,9 @@ export function createWebResonantiaClient(): ResonantiaClient {
 
       const sessionFilter = request.sessionId?.trim();
       const gatewayBaseUrl = normalizeGatewayBaseUrl(request.gatewayBaseUrl?.trim() || config.gatewayBaseUrl || "");
+      const gatewayAuthToken = normalizeGatewayAuthToken(
+        request.gatewayAuthToken?.trim() || config.gatewayAuthToken || "",
+      );
 
       if (!gatewayBaseUrl) {
         throw new Error("cloud sync path not set. open settings -> advanced sync once, then sync is one-click.");
@@ -1977,7 +2004,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
         ? localNodes.filter((node) => node.sessionId === sessionFilter)
         : localNodes;
 
-      const remoteBeforeUpload = await fetchGatewayNodes(gatewayBaseUrl, sessionFilter);
+      const remoteBeforeUpload = await fetchGatewayNodes(gatewayBaseUrl, sessionFilter, gatewayAuthToken);
       const remoteKnownKeys = new Set(remoteBeforeUpload.map((node) => node.syncKey));
 
       const upload = {
@@ -1995,7 +2022,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
           continue;
         }
 
-        const outcome = await storeNodeToGateway(gatewayBaseUrl, node);
+        const outcome = await storeNodeToGateway(gatewayBaseUrl, node, gatewayAuthToken);
         if (!outcome.valid) {
           upload.rejected += 1;
           continue;
@@ -2007,7 +2034,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
         }
       }
 
-      const remoteNodes = await fetchGatewayNodes(gatewayBaseUrl, sessionFilter);
+      const remoteNodes = await fetchGatewayNodes(gatewayBaseUrl, sessionFilter, gatewayAuthToken);
       const download = {
         fetched: remoteNodes.length,
         created: 0,
@@ -2176,6 +2203,19 @@ export function createWebResonantiaClient(): ResonantiaClient {
       const next: AppConfig = {
         ...current,
         gatewayBaseUrl: normalizeGatewayBaseUrl(baseUrl),
+      };
+
+      writeConfigToLocalStorage(normalizeConfig(next));
+      if (db) {
+        await writeConfig(db, next);
+      }
+    },
+
+    async setGatewayAuthToken(token: string): Promise<void> {
+      const { config: current, db } = await readConfigBestEffort();
+      const next: AppConfig = {
+        ...current,
+        gatewayAuthToken: normalizeGatewayAuthToken(token),
       };
 
       writeConfigToLocalStorage(normalizeConfig(next));

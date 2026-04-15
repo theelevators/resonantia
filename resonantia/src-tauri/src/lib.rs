@@ -35,6 +35,14 @@ fn set_gateway_base_url(
 }
 
 #[tauri::command]
+fn set_gateway_auth_token(
+    state: tauri::State<'_, core::AppState>,
+    token: String,
+) -> Result<(), String> {
+    core::set_gateway_auth_token(state.inner(), token)
+}
+
+#[tauri::command]
 fn set_ollama_config(
     state: tauri::State<'_, core::AppState>,
     base_url: Option<String>,
@@ -156,6 +164,7 @@ pub fn run() {
             save_layout_overrides,
             reset_layout_overrides,
             set_gateway_base_url,
+            set_gateway_auth_token,
             set_ollama_config,
             get_health,
             list_nodes,
