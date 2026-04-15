@@ -637,6 +637,13 @@ function toGatewayRequestUrls(url: string): string[] {
 
   try {
     const target = new URL(url);
+
+    // Loopback targets must stay client-side. Proxying would resolve localhost
+    // on the server host, not on the end-user device.
+    if (isLoopbackHost(target.hostname)) {
+      return [target.toString()];
+    }
+
     if (target.origin === window.location.origin) {
       return [target.toString()];
     }
