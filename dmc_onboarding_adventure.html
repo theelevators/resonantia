@@ -1,0 +1,276 @@
+
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font-sans); }
+  .dmc { padding: 1.5rem 0; max-width: 860px; }
+  .block { margin-bottom: 1.5rem; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); overflow: hidden; }
+  .block-header { padding: 0.6rem 1rem; display: flex; align-items: center; gap: 10px; background: var(--color-background-secondary); border-bottom: 0.5px solid var(--color-border-tertiary); }
+  .glyph { font-size: 15px; font-weight: 500; color: var(--color-text-secondary); font-family: var(--font-mono); }
+  .block-label { font-size: 12px; color: var(--color-text-tertiary); letter-spacing: 0.06em; text-transform: uppercase; }
+  .block-body { padding: 1rem; background: var(--color-background-primary); }
+  .prime-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 8px; margin-top: 0.75rem; }
+  .avec-pill { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 6px 10px; text-align: center; }
+  .avec-label { font-size: 11px; color: var(--color-text-tertiary); letter-spacing: 0.05em; text-transform: uppercase; }
+  .avec-val { font-size: 15px; font-weight: 500; color: var(--color-text-primary); }
+  .archetype-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .arch-card { border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); padding: 0.75rem; }
+  .arch-name { font-size: 11px; font-weight: 500; letter-spacing: 0.07em; text-transform: uppercase; color: var(--color-text-secondary); margin-bottom: 6px; }
+  .arch-label { font-size: 13px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 8px; }
+  .field { margin-bottom: 5px; }
+  .field-key { font-size: 11px; color: var(--color-text-tertiary); }
+  .field-val { font-size: 12px; color: var(--color-text-secondary); line-height: 1.4; }
+  .conf { font-size: 10px; color: var(--color-text-tertiary); font-family: var(--font-mono); }
+  .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .bar-name { font-size: 11px; color: var(--color-text-secondary); width: 72px; flex-shrink: 0; }
+  .bar-track { flex: 1; height: 4px; background: var(--color-background-secondary); border-radius: 2px; }
+  .bar-fill { height: 4px; border-radius: 2px; }
+  .bar-num { font-size: 11px; font-family: var(--font-mono); color: var(--color-text-tertiary); width: 32px; text-align: right; }
+  .conflict-high { background: #E24B4A; }
+  .conflict-mid { background: #EF9F27; }
+  .conflict-low { background: #639922; }
+  .convergence { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 0.75rem 1rem; margin-bottom: 0.75rem; }
+  .conv-label { font-size: 11px; color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+  .conv-val { font-size: 13px; color: var(--color-text-primary); line-height: 1.5; }
+  .coord-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 0.5rem; }
+  .coord-chip { font-size: 11px; font-family: var(--font-mono); background: var(--color-background-secondary); border-radius: 4px; padding: 2px 7px; color: var(--color-text-secondary); }
+  .warning-chip { font-size: 11px; font-family: var(--font-mono); background: #FAEEDA; color: #854F0B; border-radius: 4px; padding: 2px 7px; }
+  .ok-chip { font-size: 11px; font-family: var(--font-mono); background: #EAF3DE; color: #3B6D11; border-radius: 4px; padding: 2px 7px; }
+  .resonance-score { font-size: 28px; font-weight: 500; color: var(--color-text-primary); }
+  .score-row { display: flex; align-items: baseline; gap: 12px; margin-bottom: 0.75rem; }
+  .score-label { font-size: 12px; color: var(--color-text-tertiary); }
+  .arrow { color: var(--color-text-tertiary); font-size: 13px; }
+  .depth-badge { font-size: 10px; font-family: var(--font-mono); background: var(--color-background-secondary); border-radius: 3px; padding: 1px 6px; color: var(--color-text-tertiary); }
+  .section-title { font-size: 13px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 0.5rem; }
+  .divider { border: none; border-top: 0.5px solid var(--color-border-tertiary); margin: 0.75rem 0; }
+  .feedback-box { border-left: 2px solid #7F77DD; padding-left: 0.75rem; margin-top: 0.75rem; }
+  .feedback-text { font-size: 13px; color: var(--color-text-secondary); line-height: 1.6; }
+  .remediation-header { display: flex; align-items: center; gap: 8px; margin-bottom: 0.5rem; }
+  .rem-badge { font-size: 10px; font-weight: 500; background: #EEEDFE; color: #534AB7; border-radius: 3px; padding: 2px 7px; letter-spacing: 0.04em; }
+</style>
+
+<div class="dmc">
+  <h2 class="sr-only">DMC artifact for Resonantia onboarding adventure — diagnostic and remediation</h2>
+
+  <!-- BLOCK 0: PRIME / TRIGGER -->
+  <div class="block">
+    <div class="block-header">
+      <span class="glyph">⊛</span>
+      <span class="block-label">prime · trigger: diagnosed</span>
+      <span class="depth-badge">depth 0</span>
+    </div>
+    <div class="block-body">
+      <div class="field"><span class="field-key">artifact_ref</span><br><span class="field-val" style="font-family:var(--font-mono);font-size:12px;">ui://resonantia/onboarding/choose-your-own-adventure</span></div>
+      <div class="field" style="margin-top:6px;"><span class="field-key">artifact_summary</span><br><span class="field-val">cold_user_onboarding_001 — narrative adventure that encodes a real STTP node and reveals the model/character parallel</span></div>
+      <div class="field" style="margin-top:6px;"><span class="field-key">scope</span> <span class="field-val" style="display:inline;">first_run_v2 · audience: cold_users_zero_context</span></div>
+      <div class="prime-grid">
+        <div class="avec-pill"><div class="avec-label">stability</div><div class="avec-val">0.79</div></div>
+        <div class="avec-pill"><div class="avec-label">friction</div><div class="avec-val">0.61</div></div>
+        <div class="avec-pill"><div class="avec-label">logic</div><div class="avec-val">0.72</div></div>
+        <div class="avec-pill"><div class="avec-label">autonomy</div><div class="avec-val">0.55</div></div>
+        <div class="avec-pill"><div class="avec-label">psi</div><div class="avec-val">2.67</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BLOCK 1: ENVELOPE -->
+  <div class="block">
+    <div class="block-header">
+      <span class="glyph">⊜</span>
+      <span class="block-label">envelope · archetypes</span>
+    </div>
+    <div class="block-body">
+      <div class="archetype-grid">
+        <div class="arch-card">
+          <div class="arch-name">archetype 1</div>
+          <div class="arch-label">excited user</div>
+          <div class="avec-label" style="margin-bottom:4px;">lots of vibes, high openness</div>
+          <div class="bar-row"><span class="bar-name">stability</span><div class="bar-track"><div class="bar-fill conflict-low" style="width:72%"></div></div><span class="bar-num">0.72</span></div>
+          <div class="bar-row"><span class="bar-name">friction</span><div class="bar-track"><div class="bar-fill conflict-low" style="width:28%"></div></div><span class="bar-num">0.28</span></div>
+          <div class="bar-row"><span class="bar-name">autonomy</span><div class="bar-track"><div class="bar-fill conflict-low" style="width:78%"></div></div><span class="bar-num">0.78</span></div>
+          <div style="margin-top:4px;font-size:11px;color:var(--color-text-tertiary);">weight 0.40</div>
+        </div>
+        <div class="arch-card">
+          <div class="arch-name">archetype 2</div>
+          <div class="arch-label">skeptic</div>
+          <div class="avec-label" style="margin-bottom:4px;">yea yea right... let's see</div>
+          <div class="bar-row"><span class="bar-name">stability</span><div class="bar-track"><div class="bar-fill conflict-mid" style="width:81%"></div></div><span class="bar-num">0.81</span></div>
+          <div class="bar-row"><span class="bar-name">friction</span><div class="bar-track"><div class="bar-fill conflict-high" style="width:74%"></div></div><span class="bar-num">0.74</span></div>
+          <div class="bar-row"><span class="bar-name">autonomy</span><div class="bar-track"><div class="bar-fill conflict-mid" style="width:44%"></div></div><span class="bar-num">0.44</span></div>
+          <div style="margin-top:4px;font-size:11px;color:var(--color-text-tertiary);">weight 0.35</div>
+        </div>
+        <div class="arch-card">
+          <div class="arch-name">archetype 3</div>
+          <div class="arch-label">non-engager</div>
+          <div class="avec-label" style="margin-bottom:4px;">feels like too much</div>
+          <div class="bar-row"><span class="bar-name">stability</span><div class="bar-track"><div class="bar-fill conflict-low" style="width:88%"></div></div><span class="bar-num">0.88</span></div>
+          <div class="bar-row"><span class="bar-name">friction</span><div class="bar-track"><div class="bar-fill conflict-high" style="width:82%"></div></div><span class="bar-num">0.82</span></div>
+          <div class="bar-row"><span class="bar-name">autonomy</span><div class="bar-track"><div class="bar-fill conflict-high" style="width:31%"></div></div><span class="bar-num">0.31</span></div>
+          <div style="margin-top:4px;font-size:11px;color:var(--color-text-tertiary);">weight 0.25</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BLOCK 2: RESONANCE FIELD -->
+  <div class="block">
+    <div class="block-header">
+      <span class="glyph">❋</span>
+      <span class="block-label">resonance field · archetype reads</span>
+    </div>
+    <div class="block-body">
+      <div class="archetype-grid">
+        <div class="arch-card">
+          <div class="arch-name">excited user</div>
+          <div class="field"><span class="conf">perceived_intent(.88)</span><br><span class="field-val">adventure framing matches energy — openness is high</span></div>
+          <hr class="divider">
+          <div class="field"><span class="conf">friction_points(.71)</span><br><span class="field-val">reveal must match the energy invested or it deflates fast</span></div>
+          <hr class="divider">
+          <div class="field"><span class="conf">autonomy_read(.82)</span><br><span class="field-val">wants to feel like their choices genuinely mattered</span></div>
+          <hr class="divider">
+          <div class="field"><span class="conf">meaning_received(.61)</span><br><span class="field-val">low until reveal lands — vibes carry them but node must pay off</span></div>
+        </div>
+        <div class="arch-card">
+          <div class="arch-name">skeptic</div>
+          <div class="field"><span class="conf">perceived_intent(.74)</span><br><span class="field-val">suspicious of narrative wrapper — looking for the trick</span></div>
+          <hr class="divider">
+          <div class="field"><span class="conf">friction_points(.89)</span><br><span class="field-val">any moment that feels like a quiz breaks immersion and confirms suspicion</span></div>
+          <hr class="divider">
+          <div class="field"><span class="conf">autonomy_read(.48)</span><br><span class="field-val">feels guided into a predetermined outcome — needs genuine decision weight</span></div>
+          <hr class="divider">
+          <div class="field"><span class="conf">meaning_received(.52)</span><br><span class="field-val">reveal must hit before they find the seams — timing is critical</span></div>
+        </div>
+        <div class="arch-card">
+          <div class="arch-name">non-engager</div>
+          <div class="field"><span class="conf">perceived_intent(.66)</span><br><span class="field-val">every extra step is a reason to leave — activation cost is everything</span></div>
+          <hr class="divider">
+          <div class="field"><span class="conf">friction_points(.93)</span><br><span class="field-val">too many choices, too much text, any wall of content = dropout</span></div>
+          <hr class="divider">
+          <div class="field"><span class="conf">autonomy_read(.38)</span><br><span class="field-val">feels no agency — perceives the experience as being done to them</span></div>
+          <hr class="divider">
+          <div class="field"><span class="conf">meaning_received(.44)</span><br><span class="field-val">meaning only arrives if friction never exceeds patience threshold</span></div>
+        </div>
+      </div>
+
+      <hr class="divider">
+
+      <div class="convergence">
+        <div class="conv-label">convergence <span class="conf">(.71)</span></div>
+        <div class="conv-val">all archetypes can reach the reveal — but the path to it is dangerously different for each. excited user needs payoff, skeptic needs surprise, non-engager needs invisibly low cost. a single linear adventure risks serving one and losing two.</div>
+      </div>
+      <div class="convergence">
+        <div class="conv-label">conflict zones <span class="conf">(.88)</span></div>
+        <div class="bar-row" style="margin-top:4px;"><span class="bar-name">friction</span><div class="bar-track"><div class="bar-fill conflict-high" style="width:91%"></div></div><span class="bar-num">0.91</span></div>
+        <div class="bar-row"><span class="bar-name">autonomy</span><div class="bar-track"><div class="bar-fill conflict-high" style="width:83%"></div></div><span class="bar-num">0.83</span></div>
+        <div class="bar-row"><span class="bar-name">stability</span><div class="bar-track"><div class="bar-fill conflict-mid" style="width:58%"></div></div><span class="bar-num">0.58</span></div>
+        <div class="bar-row"><span class="bar-name">logic</span><div class="bar-track"><div class="bar-fill conflict-low" style="width:29%"></div></div><span class="bar-num">0.29</span></div>
+      </div>
+      <div class="feedback-box">
+        <div class="conv-label">feedback <span class="conf">(.91)</span></div>
+        <div class="feedback-text">keep adventure to 3 decisions maximum — no more. each decision must feel like genuine consequence not a survey. atmosphere must do the heavy lifting so text stays minimal. the reveal must be structurally inevitable — not announced. non-engager needs an escape hatch that doesn't feel like failure. skeptic needs at least one moment that surprises them before the reveal. excited user needs the node to feel earned not generated.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BLOCK 3: COORDINATOR -->
+  <div class="block">
+    <div class="block-header">
+      <span class="glyph">⧖</span>
+      <span class="block-label">coordinator · signal</span>
+    </div>
+    <div class="block-body">
+      <div class="score-row">
+        <span class="score-label">resonance</span>
+        <span class="resonance-score">0.58</span>
+        <span class="arrow">→</span>
+        <span class="score-label">integrity warning active</span>
+      </div>
+      <div class="coord-row">
+        <span class="coord-chip">ρ 0.71</span>
+        <span class="coord-chip">κ 0.64</span>
+        <span class="warning-chip">integrity: adventure_length_exceeds_non_engager_threshold</span>
+      </div>
+      <div class="coord-row" style="margin-top:6px;">
+        <span class="coord-chip">autonomy +0.29</span>
+        <span class="coord-chip">friction −0.31</span>
+        <span class="coord-chip">stability +0.08</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- REMEDIATION -->
+  <div class="block">
+    <div class="block-header">
+      <span class="glyph">⊛</span>
+      <span class="block-label">prime · trigger: remediated</span>
+      <span class="depth-badge">depth 1</span>
+      <span class="rem-badge">candidate A</span>
+    </div>
+    <div class="block-body">
+      <div class="field"><span class="field-key">parent</span> <span class="field-val" style="font-family:var(--font-mono);font-size:12px;">cold_user_onboarding_001</span></div>
+      <div class="prime-grid" style="margin-top:0.75rem;">
+        <div class="avec-pill"><div class="avec-label">stability</div><div class="avec-val">0.84</div></div>
+        <div class="avec-pill"><div class="avec-label">friction</div><div class="avec-val">0.31</div></div>
+        <div class="avec-pill"><div class="avec-label">logic</div><div class="avec-val">0.79</div></div>
+        <div class="avec-pill"><div class="avec-label">autonomy</div><div class="avec-val">0.81</div></div>
+        <div class="avec-pill"><div class="avec-label">psi</div><div class="avec-val">2.75</div></div>
+      </div>
+
+      <hr class="divider">
+      <div class="section-title">remediation structure</div>
+
+      <div class="convergence">
+        <div class="conv-label">act 1 · arrival</div>
+        <div class="conv-val">one sentence. pure atmosphere. no explanation. you arrive somewhere — Destiny-level. your character is already there. one binary decision. no labels on what it maps to.</div>
+      </div>
+      <div class="convergence">
+        <div class="conv-label">act 2 · stakes</div>
+        <div class="conv-val">consequence of act 1 is visible. your character faces something. one decision with genuine weight — something is gained or lost. skeptic gets surprised here by an unexpected branch. non-engager sees the path is short.</div>
+      </div>
+      <div class="convergence">
+        <div class="conv-label">act 3 · moment</div>
+        <div class="conv-val">character reaches their attractor. brief. no resolution text. then — silence. then the reveal: what you chose for them, the model tracks for you. node surfaces. character avec = your avec. the parallel lands without being stated.</div>
+      </div>
+      <div class="convergence">
+        <div class="conv-label">reveal mechanics</div>
+        <div class="conv-val">show node raw first — let them feel the structure. then animate the parallel: character dimension → your dimension. then plain language: "this is what we heard." then single CTA: plant this as your first memory. no form. no explanation. just the button.</div>
+      </div>
+
+      <hr class="divider">
+
+      <div class="archetype-grid">
+        <div class="arch-card">
+          <div class="arch-name">excited user · remediated</div>
+          <div class="field"><span class="conf">perceived_intent(.93)</span><br><span class="field-val">atmosphere matches energy, choices feel consequential</span></div>
+          <div class="field" style="margin-top:6px;"><span class="conf">meaning_received(.91)</span><br><span class="field-val">node feels earned — their vibes made something real</span></div>
+        </div>
+        <div class="arch-card">
+          <div class="arch-name">skeptic · remediated</div>
+          <div class="field"><span class="conf">perceived_intent(.86)</span><br><span class="field-val">unexpected branch in act 2 breaks the "I see where this is going" read</span></div>
+          <div class="field" style="margin-top:6px;"><span class="conf">meaning_received(.83)</span><br><span class="field-val">reveal hits before seams are found — "ah shit" lands</span></div>
+        </div>
+        <div class="arch-card">
+          <div class="arch-name">non-engager · remediated</div>
+          <div class="field"><span class="conf">perceived_intent(.79)</span><br><span class="field-val">3 decisions, minimal text, escape hatch visible but not loud</span></div>
+          <div class="field" style="margin-top:6px;"><span class="conf">meaning_received(.76)</span><br><span class="field-val">friction never exceeded patience — made it to the reveal</span></div>
+        </div>
+      </div>
+
+      <hr class="divider">
+
+      <div class="score-row" style="margin-top:0.5rem;">
+        <span class="score-label">resonance</span>
+        <span class="resonance-score">0.86</span>
+        <span class="arrow">↑ from 0.58</span>
+      </div>
+      <div class="coord-row">
+        <span class="coord-chip">ρ 0.88</span>
+        <span class="coord-chip">κ 0.85</span>
+        <span class="ok-chip">integrity: null</span>
+      </div>
+      <div class="feedback-box" style="margin-top:0.75rem;">
+        <div class="conv-label">next gain</div>
+        <div class="feedback-text">primary repair validated: 3-act structure + binary decisions + reveal-first node display. next gain comes from the One Piece layer — the reveal should feel like the story was always about this. consider: the character's name is revealed to be the user's session id. small detail. massive resonance.</div>
+      </div>
+    </div>
+  </div>
+</div>

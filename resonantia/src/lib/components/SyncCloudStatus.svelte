@@ -61,7 +61,7 @@
       {#if pullResult}
         <div class="sync-detail-row">
           <span>up</span>
-          <span>↑{pullResult.upload.uploaded} · ={pullResult.upload.duplicate} · ×{pullResult.upload.rejected}</span>
+          <span>↑{pullResult.upload.uploaded} · ~{pullResult.upload.skipped} · ={pullResult.upload.duplicate} · ×{pullResult.upload.rejected}</span>
         </div>
         <div class="sync-detail-row">
           <span>down</span>

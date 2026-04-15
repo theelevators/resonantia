@@ -1970,15 +1970,24 @@ export function createWebResonantiaClient(): ResonantiaClient {
         ? localNodes.filter((node) => node.sessionId === sessionFilter)
         : localNodes;
 
+      const remoteBeforeUpload = await fetchGatewayNodes(gatewayBaseUrl, sessionFilter);
+      const remoteKnownKeys = new Set(remoteBeforeUpload.map((node) => node.syncKey));
+
       const upload = {
         uploaded: 0,
         duplicate: 0,
+        skipped: 0,
         rejected: 0,
         batches: scopedLocalNodes.length > 0 ? 1 : 0,
         hasMore: false,
       };
 
       for (const node of scopedLocalNodes) {
+        if (remoteKnownKeys.has(node.syncKey)) {
+          upload.skipped += 1;
+          continue;
+        }
+
         const outcome = await storeNodeToGateway(gatewayBaseUrl, node);
         if (!outcome.valid) {
           upload.rejected += 1;

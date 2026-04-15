@@ -5998,9 +5998,9 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "sttp-core-rs"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73f9f1f10e613e7f95f15aa8f27c25b133f55970ab56286d43b180c8c4de8406"
+checksum = "f74db7cccc901aa675d86a0bf31cf0a4bfec9c8c86db4bd0c9eedc90f4e90323"
 dependencies = [
  "anyhow",
  "async-trait",

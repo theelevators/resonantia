@@ -83,6 +83,8 @@ const LOCAL_STTP_DB_FILE_NAME: &str = "sttp-local.db";
 const GATEWAY_LIST_NODES_PATH: &str = "/api/v1/nodes";
 const GATEWAY_STORE_CONTEXT_PATH: &str = "/api/v1/store";
 const GATEWAY_PAGE_OVERSCAN: usize = 3;
+const GATEWAY_DOWNLOAD_CONNECTOR_ID: &str = "gateway:download";
+const GATEWAY_DOWNLOAD_SOURCE_KIND: &str = "resonantia-gateway";
 
 struct SttpRuntime {
     store: Arc<dyn NodeStore>,
@@ -533,6 +535,7 @@ pub struct SyncPullCommandResponse {
 struct SyncUploadSummary {
     uploaded: i32,
     duplicate: i32,
+    skipped: i32,
     rejected: i32,
     batches: i32,
     has_more: bool,
@@ -571,6 +574,7 @@ pub struct SyncNowResponse {
 struct SyncUploadStats {
     uploaded: i32,
     duplicate: i32,
+    skipped: i32,
     rejected: i32,
     batches: i32,
     has_more: bool,
@@ -1136,7 +1140,18 @@ fn gateway_node_to_sttp(dto: GatewayNodeDto) -> anyhow::Result<SttpNode> {
         psi: dto.psi,
     };
 
-    normalize_source_metadata_for_surreal(&mut node, "gateway:download", "resonantia-gateway");
+    normalize_source_metadata_for_surreal(
+        &mut node,
+        GATEWAY_DOWNLOAD_CONNECTOR_ID,
+        GATEWAY_DOWNLOAD_SOURCE_KIND,
+    );
+
+    if let Some(metadata) = node.source_metadata.as_mut() {
+        // Force downloaded records to be cloud-origin so upload pass can skip
+        // them and avoid upload/download ping-pong on repeated sync actions.
+        metadata.connector_id = GATEWAY_DOWNLOAD_CONNECTOR_ID.to_string();
+        metadata.source_kind = GATEWAY_DOWNLOAD_SOURCE_KIND.to_string();
+    }
 
     Ok(node)
 }
@@ -1336,6 +1351,31 @@ async fn store_node_to_gateway(
     Ok(parse_gateway_store_outcome(&payload))
 }
 
+async fn mark_local_node_as_cloud_synced(
+    runtime: &SttpRuntime,
+    mut node: SttpNode,
+) -> Result<(), String> {
+    let sync_key = sync_key_for_node(&node);
+    node.sync_key = sync_key.clone();
+    node.source_metadata = Some(ConnectorMetadata {
+        connector_id: GATEWAY_DOWNLOAD_CONNECTOR_ID.to_string(),
+        source_kind: GATEWAY_DOWNLOAD_SOURCE_KIND.to_string(),
+        upstream_id: sync_key.clone(),
+        revision: Some(sync_key),
+        observed_at_utc: Utc::now(),
+        extra: Some(json!({
+            "syncedVia": "resonantia-sync-now-upload",
+        })),
+    });
+
+    runtime
+        .store
+        .upsert_node_async(node)
+        .await
+        .map(|_| ())
+        .map_err(|err| map_err("local node sync metadata stamp failed", err))
+}
+
 async fn push_local_changes_to_gateway(
     runtime: &SttpRuntime,
     http: &Client,
@@ -1350,19 +1390,24 @@ async fn push_local_changes_to_gateway(
     let mut stop_upload_for_run = false;
 
     while (summary.batches as usize) < capped_batches {
-        let page = local_outbound_changes_via_list_nodes(runtime, session_filter, cursor.clone(), page_size).await?;
+        let ChangeQueryResult {
+            nodes,
+            next_cursor,
+            has_more,
+        } = local_outbound_changes_via_list_nodes(runtime, session_filter, cursor.clone(), page_size)
+            .await?;
 
-        if page.nodes.is_empty() {
-            summary.has_more = page.has_more;
+        if nodes.is_empty() {
+            summary.has_more = has_more;
             break;
         }
 
         summary.batches += 1;
 
-        for node in page.nodes.iter() {
-            if node_originates_from_gateway(node) {
-                // Nodes pulled from gateway are already cloud-origin; skip re-upload.
-                summary.duplicate += 1;
+        for node in nodes.into_iter() {
+            if node_originates_from_gateway(&node) {
+                // Nodes already tagged cloud-origin are intentionally bypassed.
+                summary.skipped += 1;
                 continue;
             }
 
@@ -1386,6 +1431,10 @@ async fn push_local_changes_to_gateway(
             if outcome.duplicate {
                 summary.duplicate += 1;
             }
+
+            if let Err(error) = mark_local_node_as_cloud_synced(runtime, node).await {
+                eprintln!("{error}");
+            }
         }
 
         if stop_upload_for_run {
@@ -1393,8 +1442,8 @@ async fn push_local_changes_to_gateway(
             break;
         }
 
-        summary.has_more = page.has_more;
-        cursor = page.next_cursor;
+        summary.has_more = has_more;
+        cursor = next_cursor;
 
         if !summary.has_more || cursor.is_none() {
             break;
@@ -1449,6 +1498,7 @@ fn to_sync_upload_stats(summary: SyncUploadSummary) -> SyncUploadStats {
     SyncUploadStats {
         uploaded: summary.uploaded,
         duplicate: summary.duplicate,
+        skipped: summary.skipped,
         rejected: summary.rejected,
         batches: summary.batches,
         has_more: summary.has_more,

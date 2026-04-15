@@ -10,9 +10,11 @@
   import CalibrateDrawer from './components/CalibrateDrawer.svelte';
   import SettingsDrawer from './components/SettingsDrawer.svelte';
   import WalkthroughGuide from './components/WalkthroughGuide.svelte';
+  import AdventureOnboarding from './components/AdventureOnboarding.svelte';
   import { resonantiaClient } from './resonantiaClient';
   import type {
     AiSummary,
+    AvecState,
     ChatMessage,
     GraphResponse,
     GraphSessionDto,
@@ -32,15 +34,47 @@
   // ── Canvas ──────────────────────────────────────────
   let canvas: HTMLCanvasElement;
   let ctx: CanvasRenderingContext2D;
-  let raf: number;
+  let raf = 0;
   let container: HTMLDivElement;
 
   let viewportWidth = 800;
   let viewportHeight = 600;
   let deviceScale = 1;
+  const ACTIVE_FRAME_STEP_MS = 1000 / 60;
+  const IDLE_FRAME_STEP_MS = 1000 / 24;
+  const RECENT_INTERACTION_WINDOW_MS = 1400;
+  const CAMERA_POS_EPSILON = 0.35;
+  const CAMERA_SCALE_EPSILON = 0.01;
+  let lastFrameDrawAt = 0;
+  let lastInteractionAt = 0;
 
   function W() { return viewportWidth; }
   function H() { return viewportHeight; }
+
+  function nowMs() {
+    return typeof performance !== 'undefined' ? performance.now() : Date.now();
+  }
+
+  function noteInteraction() {
+    lastInteractionAt = nowMs();
+  }
+
+  function startRenderLoop() {
+    if (raf !== 0) {
+      return;
+    }
+
+    raf = requestAnimationFrame(draw);
+  }
+
+  function stopRenderLoop() {
+    if (raf === 0) {
+      return;
+    }
+
+    cancelAnimationFrame(raf);
+    raf = 0;
+  }
 
   // ── Data ──────────────────────────────────────────────────
   let graph: GraphResponse | null = null;
@@ -52,11 +86,19 @@
   let lastTransportLabel = '';
   let sessionAvecMap: Record<string, { stability: number; friction: number; logic: number; autonomy: number; psi: number }> = {};
   let nodeAvecMap: Record<string, { stability: number; friction: number; logic: number; autonomy: number; psi: number }> = {};
+  let sessionById = new Map<string, GraphSessionDto>();
+  let selectedSessionNodes: GraphNodeDto[] = [];
+  let selectedSessionTopMoments: GraphNodeDto[] = [];
   const ONBOARDING_DISMISSED_KEY = 'resonantia:onboarding-dismissed:v1';
+  const ADVENTURE_COMPLETED_KEY  = 'resonantia:adventure-completed:v1';
+  const ADVENTURE_SESSION_FALLBACK = 'first-user-experience-resonantia';
   const WALKTHROUGH_SESSION_SEED = 'resonantia-demo';
   let onboardingOpen = false;
   let onboardingDismissed = false;
   let onboardingHydrated = false;
+  let adventureOpen = false;
+  let adventureCompleted = false;
+  let adventureHydrated = false;
   let hasGraphData = false;
 
   type WalkthroughMode = 'first-run' | 'demo';
@@ -279,6 +321,24 @@
     return sessionId.startsWith('s:') ? sessionId : `s:${sessionId}`;
   }
 
+  $: sessionById = graph
+    ? new Map(graph.sessions.map((session) => [session.id, session]))
+    : new Map();
+
+  $: {
+    if (!graph || !selectedSession) {
+      selectedSessionNodes = [];
+      selectedSessionTopMoments = [];
+    } else {
+      const selectedKey = sessionKey(selectedSession.id);
+      const nodes = graph.nodes.filter((node) => sessionKey(node.sessionId) === selectedKey);
+      selectedSessionNodes = nodes;
+      selectedSessionTopMoments = [...nodes]
+        .sort((left, right) => right.psi - left.psi)
+        .slice(0, Math.min(4, nodes.length));
+    }
+  }
+
   function sessionRenderPos(session: GraphSessionDto): Vec2 {
     const base = sessionPos[session.id];
     if (!base) return { x: W() / 2, y: H() / 2 };
@@ -370,9 +430,27 @@
     }
   }
 
+  function readAdventureCompleted(): boolean {
+    if (typeof localStorage === 'undefined') return false;
+    try { return localStorage.getItem(ADVENTURE_COMPLETED_KEY) === '1'; } catch { return false; }
+  }
+
+  function persistAdventureCompleted() {
+    if (typeof localStorage === 'undefined') return;
+    try { localStorage.setItem(ADVENTURE_COMPLETED_KEY, '1'); } catch {}
+  }
+
   $: hasGraphData = Boolean(graph && ((graph.sessions?.length ?? 0) > 0 || (graph.nodes?.length ?? 0) > 0));
-  $: if (onboardingHydrated && !loading && !error && !hasGraphData && !onboardingDismissed && !onboardingOpen) {
-    openWalkthrough('first-run');
+
+  // Adventure gates the walkthrough: show adventure first for cold users who haven't seen it.
+  // If they skip → adventureCompleted=true but onboardingDismissed=false → walkthrough fires next.
+  // If they complete → adventureCompleted=true + onboardingDismissed=true → walkthrough skipped.
+  $: if (adventureHydrated && onboardingHydrated && !loading && !error && !hasGraphData && !adventureOpen && !onboardingOpen && !onboardingDismissed) {
+    if (!adventureCompleted) {
+      adventureOpen = true;
+    } else {
+      openWalkthrough('first-run');
+    }
   }
 
   function walkthroughSelectorForStep(step: WalkthroughStep): string | null {
@@ -1026,6 +1104,7 @@
 
   // ── Navigation ────────────────────────────────────────────────
   function descendToWave(s: GraphSessionDto) {
+    noteInteraction();
     closeTransientUi();
     negativeLayerActive = false;
     selectedSession = s;
@@ -1041,6 +1120,7 @@
   }
 
   async function descendToCollapse(n: GraphNodeDto) {
+    noteInteraction();
     closeTransientUi();
     selectedNode = n;
     level        = 2;
@@ -1071,6 +1151,7 @@
   }
 
   function surfaceToWave() {
+    noteInteraction();
     closeTransientUi();
     selectedNode = null;
     closeCard();
@@ -1086,6 +1167,7 @@
   }
 
   function surfaceToConstellation() {
+    noteInteraction();
     closeTransientUi();
     selectedSession = null;
     selectedNode    = null;
@@ -1176,8 +1258,8 @@
     if (telescopeCameraEngaged || !graph || level > 0) return;
     const graphData = graph;
     graphData.edges.forEach(e => {
-      const sourceSession = graphData.sessions.find(session => session.id === e.source);
-      const targetSession = graphData.sessions.find(session => session.id === e.target);
+      const sourceSession = sessionById.get(e.source);
+      const targetSession = sessionById.get(e.target);
       if (!sourceSession || !targetSession) return;
       const sp = sessionRenderPos(sourceSession);
       const tp = sessionRenderPos(targetSession);
@@ -1276,7 +1358,7 @@
     const sp = sessionPos[selectedSession.id];
     if (!sp) return;
     const av = sessionAvec(selectedSession);
-    const orbit = sessionOrbitRadius(selectedSession);
+    const orbit = sessionOrbitRadius(selectedSession, selectedSessionNodes.length);
     const rx  = orbit + 18;
     const ry  = (orbit + 18) * 0.74;
     const oda = 4 + Math.sin(t * 0.5);
@@ -1303,7 +1385,7 @@
     const sp = sessionPos[session.id];
     if (!sp) return;
 
-    const sessionNodes = graph.nodes.filter(n => sessionKey(n.sessionId) === sessionKey(session.id));
+    const sessionNodes = selectedSessionNodes;
     if (sessionNodes.length === 0) return;
 
     const baseAvec = sessionAvec(session);
@@ -1359,7 +1441,7 @@
 
   function drawNodes() {
     if (telescopeCameraEngaged || !graph || level < 1 || !selectedSession) return;
-    const sessionNodes = graph.nodes.filter(n => sessionKey(n.sessionId) === sessionKey(selectedSession!.id));
+    const sessionNodes = selectedSessionNodes;
 
     sessionNodes.forEach(n => {
       const np = nodeRenderPos(n);
@@ -1409,10 +1491,7 @@
     const sp = sessionPos[session.id];
     if (!sp) return;
 
-    const sessionNodes = graph.nodes.filter(n => sessionKey(n.sessionId) === sessionKey(session.id));
-    const labeledMoments = [...sessionNodes]
-      .sort((a, b) => b.psi - a.psi)
-      .slice(0, Math.min(4, sessionNodes.length));
+    const labeledMoments = selectedSessionTopMoments;
 
     labeledMoments.forEach(node => {
       const np = nodeRenderPos(node);
@@ -1635,9 +1714,57 @@
     ctx.fillRect(0, 0, W(), H());
   }
 
+  function cameraIsMoving() {
+    return Math.abs(targetCamX - camX) > CAMERA_POS_EPSILON
+      || Math.abs(targetCamY - camY) > CAMERA_POS_EPSILON
+      || Math.abs(targetCamScale - camScale) > CAMERA_SCALE_EPSILON;
+  }
+
+  function frameStepForNow(now: number) {
+    const recentlyInteractive = now - lastInteractionAt < RECENT_INTERACTION_WINDOW_MS;
+    const highActivity = recentlyInteractive
+      || dragging
+      || telescopeDragY !== null
+      || telescopePhase !== 'idle'
+      || cameraIsMoving();
+
+    return highActivity ? ACTIVE_FRAME_STEP_MS : IDLE_FRAME_STEP_MS;
+  }
+
+  function handleVisibilityChange() {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    if (document.hidden) {
+      stopRenderLoop();
+      return;
+    }
+
+    noteInteraction();
+    lastFrameDrawAt = 0;
+    startRenderLoop();
+  }
+
   // ── Main render loop ────────────────────────────────────────────
-  function draw() {
-    if (!ctx) { raf = requestAnimationFrame(draw); return; }
+  function draw(frameTime = 0) {
+    raf = 0;
+
+    if (!ctx) {
+      startRenderLoop();
+      return;
+    }
+
+    const now = frameTime > 0 ? frameTime : nowMs();
+    const frameStep = frameStepForNow(now);
+    if (lastFrameDrawAt > 0 && now - lastFrameDrawAt < frameStep) {
+      startRenderLoop();
+      return;
+    }
+
+    const elapsed = lastFrameDrawAt > 0 ? now - lastFrameDrawAt : frameStep;
+    const tickScale = Math.max(0.5, Math.min(2.5, elapsed / ACTIVE_FRAME_STEP_MS));
+    lastFrameDrawAt = now;
 
     camX     += (targetCamX     - camX)     * LERP;
     camY     += (targetCamY     - camY)     * LERP;
@@ -1699,13 +1826,14 @@
       ctx.fillText(error.slice(0, 80), W() / 2, H() / 2);
     }
 
-    t += 0.01;
-    raf = requestAnimationFrame(draw);
+    t += 0.01 * tickScale;
+    startRenderLoop();
   }
 
   // ── Resize ───────────────────────────────────────────────────
   function resize() {
     if (!canvas || !container) return;
+    noteInteraction();
     const rect = container.getBoundingClientRect();
     const w = Math.round(Math.max(rect.width, window.innerWidth));
     const h = Math.round(Math.max(rect.height, window.innerHeight));
@@ -1738,6 +1866,8 @@
     if (telescopeCameraEngaged || level !== 0) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
 
+    noteInteraction();
+
     if (negativeLayerDriftX !== 0 || negativeLayerDriftY !== 0) {
       camX += negativeLayerDriftX;
       camY += negativeLayerDriftY;
@@ -1759,6 +1889,8 @@
   function onPointerMove(e: PointerEvent) {
     if (activePanPointerId !== null && e.pointerId !== activePanPointerId) return;
     if (telescopeCameraEngaged || !dragging || level !== 0) return;
+
+    noteInteraction();
     const dx = e.clientX - dragStart.x;
     const dy = e.clientY - dragStart.y;
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didDrag = true;
@@ -1774,6 +1906,7 @@
     }
     activePanPointerId = null;
     dragging = false;
+    noteInteraction();
     if (telescopeCameraEngaged) return;
     if (didDrag) return;
 
@@ -1782,8 +1915,7 @@
     if (level === 2) { surfaceToWave(); return; }
 
     if (level === 1 && selectedSession) {
-      const sessionNodes = graph?.nodes.filter(n => sessionKey(n.sessionId) === sessionKey(selectedSession!.id)) ?? [];
-      for (const n of sessionNodes) {
+      for (const n of selectedSessionNodes) {
         const np = nodeRenderPos(n);
         if (!np) continue;
         const sc = toScreen(np.x, np.y);
@@ -1815,6 +1947,7 @@
       canvas.releasePointerCapture(activePanPointerId);
     }
     activePanPointerId = null;
+    noteInteraction();
     dragging = false;
     didDrag = false;
   }
@@ -2229,6 +2362,7 @@
       return;
     }
 
+    noteInteraction();
     negativeLayerActive = !negativeLayerActive;
     targetCamScale = constellationLayerScale();
   }
@@ -2238,6 +2372,7 @@
       return;
     }
 
+    noteInteraction();
     markWalkthroughStepSatisfied('telescope');
 
     closeTransientUi();
@@ -2251,6 +2386,7 @@
       return;
     }
 
+    noteInteraction();
     beginTelescopeExitTransition();
   }
 
@@ -2268,6 +2404,7 @@
   }
 
   function beginTelescopeDial(clientY: number) {
+    noteInteraction();
     telescopeDragY = clientY;
     telescopeDragBasePct = telescopeDialPct;
   }
@@ -2277,6 +2414,7 @@
       return;
     }
 
+    noteInteraction();
     const delta = telescopeDragY - clientY;
     telescopeDialPct = Math.max(0, Math.min(TELESCOPE_DIAL_MAX, telescopeDragBasePct + delta * 0.55));
   }
@@ -2784,6 +2922,10 @@
   }
 
   async function runSyncPull() {
+    if (syncPullLoading) {
+      return;
+    }
+
     syncPullLoading = true;
     syncPullError = null;
     syncPullResult = null;
@@ -2956,16 +3098,292 @@
     finally      { calibLoading = false; }
   }
 
+  type AdventureChoiceStageId = 'decision1' | 'decision2' | 'decision3' | 'cta';
+
+  type AdventureStageSignal = {
+    stage: AdventureChoiceStageId;
+    selectedOption: string | null;
+    stareMs: number;
+    decisionMs: number;
+    hoverMsByOption: Record<string, number>;
+    hoverTotalMs: number;
+    switches: number;
+    optionVisits: number;
+    moveCount: number;
+    style: 'decisive' | 'explored' | 'wavering';
+    hesitation: number;
+  };
+
+  type AdventureSignalMetrics = {
+    totalDurationMs: number;
+    explorationScore: number;
+    hesitationScore: number;
+    decisivenessScore: number;
+    engagementScore: number;
+    weights: {
+      stability: number;
+      friction: number;
+      logic: number;
+      autonomy: number;
+    };
+    stages: Record<AdventureChoiceStageId, AdventureStageSignal>;
+    naming: {
+      dwellMs: number;
+      firstInputLatencyMs: number;
+      inputChanges: number;
+      backspaces: number;
+    };
+  };
+
+  type AdventureCompleteDetail = {
+    name: string;
+    d1: string;
+    d2: string;
+    d3: string;
+    avec: AvecState;
+    avecBase?: AvecState;
+    metrics?: AdventureSignalMetrics;
+  };
+
+  function clampRange(value: number, min: number, max: number) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function round2(value: number) {
+    return Number(value.toFixed(2));
+  }
+
+  function format2(value: number) {
+    return round2(value).toFixed(2);
+  }
+
+  function wait(ms: number) {
+    return new Promise<void>((resolve) => {
+      setTimeout(() => resolve(), ms);
+    });
+  }
+
+  function safeToken(value: string, fallback = 'na') {
+    const normalized = value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+
+    return normalized || fallback;
+  }
+
+  function signedShiftToken(value: number) {
+    const shifted = Math.round(value * 100);
+    if (shifted >= 0) return `p${shifted}`;
+    return `m${Math.abs(shifted)}`;
+  }
+
+  function toSessionSeed(name: string) {
+    const token = safeToken(name, 'unnamed');
+    if (token === 'unnamed') {
+      return ADVENTURE_SESSION_FALLBACK;
+    }
+
+    return token.slice(0, 64);
+  }
+
+  function avecPsi(avec: Pick<AvecState, 'stability' | 'friction' | 'logic' | 'autonomy'>) {
+    return round2(avec.stability + avec.friction + avec.logic + avec.autonomy);
+  }
+
+  function normalizeAvec(input: Partial<AvecState> | undefined): AvecState {
+    const stability = clamp01(Number.isFinite(input?.stability) ? Number(input?.stability) : 0.5);
+    const friction = clamp01(Number.isFinite(input?.friction) ? Number(input?.friction) : 0.5);
+    const logic = clamp01(Number.isFinite(input?.logic) ? Number(input?.logic) : 0.5);
+    const autonomy = clamp01(Number.isFinite(input?.autonomy) ? Number(input?.autonomy) : 0.5);
+
+    return {
+      stability: round2(stability),
+      friction: round2(friction),
+      logic: round2(logic),
+      autonomy: round2(autonomy),
+      psi: avecPsi({ stability, friction, logic, autonomy }),
+    };
+  }
+
+  function emptyAdventureStage(stage: AdventureChoiceStageId): AdventureStageSignal {
+    return {
+      stage,
+      selectedOption: null,
+      stareMs: 0,
+      decisionMs: 0,
+      hoverMsByOption: {},
+      hoverTotalMs: 0,
+      switches: 0,
+      optionVisits: 0,
+      moveCount: 0,
+      style: 'decisive',
+      hesitation: 0,
+    };
+  }
+
+  function readAdventureStage(metrics: AdventureSignalMetrics | undefined, stage: AdventureChoiceStageId) {
+    return metrics?.stages?.[stage] ?? emptyAdventureStage(stage);
+  }
+
+  function buildAdventureSttpNode(sessionId: string, detail: AdventureCompleteDetail) {
+    const timestamp = new Date().toISOString();
+    const nameToken = safeToken(detail.name || 'unnamed', 'unnamed');
+    const d1Token = safeToken(detail.d1 || 'light', 'light');
+    const d2Token = safeToken(detail.d2 || 'complete', 'complete');
+    const d3Token = safeToken(detail.d3 || 'merge', 'merge');
+    const decisionPath = `d1_${d1Token}_d2_${d2Token}_d3_${d3Token}`;
+    const metrics = detail.metrics;
+    const d1Stage = readAdventureStage(metrics, 'decision1');
+    const d2Stage = readAdventureStage(metrics, 'decision2');
+    const d3Stage = readAdventureStage(metrics, 'decision3');
+    const ctaStage = readAdventureStage(metrics, 'cta');
+
+    const exploration = clamp01(metrics?.explorationScore ?? 0.34);
+    const hesitation = clamp01(metrics?.hesitationScore ?? 0.32);
+    const decisiveness = clamp01(metrics?.decisivenessScore ?? (1 - hesitation));
+    const engagement = clamp01(metrics?.engagementScore ?? 0.38);
+    const weights = metrics?.weights ?? { stability: 0, friction: 0, logic: 0, autonomy: 0 };
+
+    const userAvec = normalizeAvec(detail.avec);
+    const baseAvec = normalizeAvec(detail.avecBase ?? detail.avec);
+    const modelAvec = normalizeAvec({
+      stability: clamp01(userAvec.stability * 0.72 + baseAvec.stability * 0.28 + decisiveness * 0.04 - hesitation * 0.02),
+      friction: clamp01(userAvec.friction * 0.72 + baseAvec.friction * 0.28 + hesitation * 0.05 - decisiveness * 0.03),
+      logic: clamp01(userAvec.logic * 0.72 + baseAvec.logic * 0.28 + engagement * 0.03),
+      autonomy: clamp01(userAvec.autonomy * 0.72 + baseAvec.autonomy * 0.28 + exploration * 0.04),
+    });
+
+    const compressionAvec = normalizeAvec({
+      stability: (userAvec.stability + modelAvec.stability) / 2,
+      friction: (userAvec.friction + modelAvec.friction) / 2,
+      logic: (userAvec.logic + modelAvec.logic) / 2,
+      autonomy: (userAvec.autonomy + modelAvec.autonomy) / 2,
+    });
+
+    const hoverLightMs = Math.round(d1Stage.hoverMsByOption.light ?? 0);
+    const hoverSoundMs = Math.round(d1Stage.hoverMsByOption.sound ?? 0);
+
+    const hesitationToken = `d1_${Math.round(d1Stage.hesitation * 100)}_d2_${Math.round(d2Stage.hesitation * 100)}_d3_${Math.round(d3Stage.hesitation * 100)}_cta_${Math.round(ctaStage.hesitation * 100)}`;
+    const latencyToken = `d1_${Math.round(d1Stage.decisionMs)}_d2_${Math.round(d2Stage.decisionMs)}_d3_${Math.round(d3Stage.decisionMs)}_cta_${Math.round(ctaStage.decisionMs)}`;
+    const stareToken = `d1_${Math.round(d1Stage.stareMs)}_d2_${Math.round(d2Stage.stareMs)}_d3_${Math.round(d3Stage.stareMs)}_cta_${Math.round(ctaStage.stareMs)}`;
+    const switchToken = `d1_${d1Stage.switches}_d2_${d2Stage.switches}_d3_${d3Stage.switches}_cta_${ctaStage.switches}`;
+    const styleToken = `d1_${safeToken(d1Stage.style)}_d2_${safeToken(d2Stage.style)}_d3_${safeToken(d3Stage.style)}_cta_${safeToken(ctaStage.style)}`;
+    const engagementToken = `explore_${Math.round(exploration * 100)}_hesitate_${Math.round(hesitation * 100)}_decide_${Math.round(decisiveness * 100)}_engage_${Math.round(engagement * 100)}`;
+    const namingToken = `dwell_${Math.round(metrics?.naming?.dwellMs ?? 0)}_first_input_${Math.round(metrics?.naming?.firstInputLatencyMs ?? 0)}_changes_${Math.round(metrics?.naming?.inputChanges ?? 0)}_backspaces_${Math.round(metrics?.naming?.backspaces ?? 0)}`;
+    const shiftToken = `grounding_${signedShiftToken(weights.stability)}_wear_${signedShiftToken(weights.friction)}_clarity_${signedShiftToken(weights.logic)}_self_trust_${signedShiftToken(weights.autonomy)}`;
+
+    const rho = clampRange(0.74 + engagement * 0.14 + decisiveness * 0.08 + (1 - hesitation) * 0.04, 0.7, 0.98);
+    const kappa = clampRange(0.72 + exploration * 0.12 + (1 - hesitation) * 0.08 + Math.min(1, d1Stage.optionVisits / 2) * 0.05, 0.7, 0.97);
+
+    return [
+      '⏣',
+      `⊕⟨ ⏣0{ trigger: manual, response_format: temporal_node, origin_session: ${sessionId}, compression_depth: 3, parent_node: null, prime: { attractor_config: { stability: ${format2(modelAvec.stability)}, friction: ${format2(modelAvec.friction)}, logic: ${format2(modelAvec.logic)}, autonomy: ${format2(modelAvec.autonomy)} }, context_summary: onboarding_behavioral_memory_${decisionPath}, relevant_tier: raw, retrieval_budget: 10 } } ⟩`,
+      `⦿⟨ ⏣0{ timestamp: ${timestamp}, tier: raw, session_id: ${sessionId}, schema_version: sttp-1.0, user_avec: { stability: ${format2(userAvec.stability)}, friction: ${format2(userAvec.friction)}, logic: ${format2(userAvec.logic)}, autonomy: ${format2(userAvec.autonomy)}, psi: ${format2(userAvec.psi)} }, model_avec: { stability: ${format2(modelAvec.stability)}, friction: ${format2(modelAvec.friction)}, logic: ${format2(modelAvec.logic)}, autonomy: ${format2(modelAvec.autonomy)}, psi: ${format2(modelAvec.psi)} } } ⟩`,
+      `◈⟨ ⏣0{ decision_path(.98): ${decisionPath}, chosen_name(.95): ${nameToken}, hover_split_decision1_ms(.94): light_${hoverLightMs}_sound_${hoverSoundMs}, switch_pattern(.92): ${switchToken}, stage_styles(.92): ${styleToken}, stare_latency_ms(.91): ${stareToken}, decision_latency_ms(.91): ${latencyToken}, naming_signal(.9): ${namingToken}, engagement_profile(.9): ${engagementToken}, weighting_shift(.91): ${shiftToken}, total_journey_ms(.88): ${Math.round(metrics?.totalDurationMs ?? 0)} } ⟩`,
+      `⍉⟨ ⏣0{ rho: ${format2(rho)}, kappa: ${format2(kappa)}, psi: ${format2(modelAvec.psi)}, compression_avec: { stability: ${format2(compressionAvec.stability)}, friction: ${format2(compressionAvec.friction)}, logic: ${format2(compressionAvec.logic)}, autonomy: ${format2(compressionAvec.autonomy)}, psi: ${format2(compressionAvec.psi)} } } ⟩`,
+    ].join('\n');
+  }
+
+  function buildAdventureFallbackNode(sessionId: string, detail: AdventureCompleteDetail) {
+    const timestamp = new Date().toISOString();
+    const nameToken = safeToken(detail.name || 'unnamed', 'unnamed');
+    const d1Token = safeToken(detail.d1 || 'light', 'light');
+    const d2Token = safeToken(detail.d2 || 'complete', 'complete');
+    const d3Token = safeToken(detail.d3 || 'merge', 'merge');
+    const userAvec = normalizeAvec(detail.avec);
+    const modelAvec = normalizeAvec(detail.avecBase ?? detail.avec);
+
+    return [
+      '⏣',
+      `⊕⟨ ⏣0{ trigger: manual, response_format: temporal_node, origin_session: ${sessionId}, compression_depth: 2, parent_node: null, prime: { attractor_config: { stability: ${format2(modelAvec.stability)}, friction: ${format2(modelAvec.friction)}, logic: ${format2(modelAvec.logic)}, autonomy: ${format2(modelAvec.autonomy)} }, context_summary: onboarding_fallback_memory, relevant_tier: raw, retrieval_budget: 8 } } ⟩`,
+      `⦿⟨ ⏣0{ timestamp: ${timestamp}, tier: raw, session_id: ${sessionId}, schema_version: sttp-1.0, user_avec: { stability: ${format2(userAvec.stability)}, friction: ${format2(userAvec.friction)}, logic: ${format2(userAvec.logic)}, autonomy: ${format2(userAvec.autonomy)}, psi: ${format2(userAvec.psi)} }, model_avec: { stability: ${format2(modelAvec.stability)}, friction: ${format2(modelAvec.friction)}, logic: ${format2(modelAvec.logic)}, autonomy: ${format2(modelAvec.autonomy)}, psi: ${format2(modelAvec.psi)} } } ⟩`,
+      `◈⟨ ⏣0{ decision_path(.95): d1_${d1Token}_d2_${d2Token}_d3_${d3Token}, chosen_name(.93): ${nameToken}, source(.9): onboarding_adventure_weighted_capture } ⟩`,
+      `⍉⟨ ⏣0{ rho: 0.86, kappa: 0.84, psi: ${format2(modelAvec.psi)}, compression_avec: { stability: ${format2(modelAvec.stability)}, friction: ${format2(modelAvec.friction)}, logic: ${format2(modelAvec.logic)}, autonomy: ${format2(modelAvec.autonomy)}, psi: ${format2(modelAvec.psi)} } } ⟩`,
+    ].join('\n');
+  }
+
+  async function persistAdventureMemory(detail: AdventureCompleteDetail): Promise<boolean> {
+    const sessionId = toSessionSeed(detail.name);
+    composeSessionId = sessionId;
+    calibSessionId = sessionId;
+
+    try {
+      let node = buildAdventureSttpNode(sessionId, detail);
+      let res = await resonantiaClient.storeContext({
+        node,
+        sessionId,
+      });
+
+      if (!res.valid) {
+        node = buildAdventureFallbackNode(sessionId, detail);
+        res = await resonantiaClient.storeContext({
+          node,
+          sessionId,
+        });
+
+        if (!res.valid) {
+          console.error('adventure memory rejected', res.validationError ?? 'store rejected by local policy');
+          return false;
+        }
+      }
+
+      await loadGraph();
+      return true;
+    } catch (err) {
+      console.error('adventure memory store failed', err);
+      return false;
+    }
+  }
+
+  async function continueIntoWalkthroughAfterAdventure(detail: AdventureCompleteDetail) {
+    const stored = await persistAdventureMemory(detail);
+    if (!stored) {
+      return;
+    }
+
+    onboardingDismissed = false;
+    persistOnboardingDismissedState(false);
+
+    await wait(320);
+    if (!onboardingOpen) {
+      openWalkthrough('first-run');
+    }
+  }
+
+  function handleAdventureComplete(e: CustomEvent<AdventureCompleteDetail>) {
+    const detail = e.detail;
+    adventureOpen = false;
+    adventureCompleted = true;
+    persistAdventureCompleted();
+    void continueIntoWalkthroughAfterAdventure(detail);
+  }
+
+  function handleAdventureSkip() {
+    adventureOpen = false;
+    adventureCompleted = true;
+    persistAdventureCompleted();
+    // onboardingDismissed stays false → reactive fires openWalkthrough('first-run')
+  }
+
   // ── Lifecycle ─────────────────────────────────────────────────
   onMount(() => {
     onboardingDismissed = readOnboardingDismissedState();
-    onboardingHydrated = true;
+    adventureCompleted  = readAdventureCompleted();
+    adventureHydrated   = true;
+    onboardingHydrated  = true;
     ctx = canvas.getContext('2d')!;
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    draw();
+    noteInteraction();
+    startRenderLoop();
     requestAnimationFrame(() => { resize(); loadGraph(); });
     checkHealth();
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
 
     window.addEventListener('mousemove', handleTelescopeDialMouseMove);
     window.addEventListener('mouseup', endTelescopeDial);
@@ -2976,6 +3394,9 @@
     ro.observe(container);
     return () => {
       ro.disconnect();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
       window.removeEventListener('mousemove', handleTelescopeDialMouseMove);
       window.removeEventListener('mouseup', endTelescopeDial);
       window.removeEventListener('touchmove', handleTelescopeDialTouchMove);
@@ -2984,7 +3405,7 @@
   });
 
   onDestroy(() => {
-    cancelAnimationFrame(raf);
+    stopRenderLoop();
     clearSyncDetailTimer();
     clearComposePromptCopiedTimer();
     clearWalkthroughCueTimer();
@@ -3068,6 +3489,12 @@
     on:toggle={toggleComposeModeMenu}
     on:live={openComposeLive}
     on:importare={openComposeImportare}
+  />
+
+  <AdventureOnboarding
+    open={adventureOpen}
+    on:complete={handleAdventureComplete}
+    on:skip={handleAdventureSkip}
   />
 
   <WalkthroughGuide

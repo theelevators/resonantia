@@ -82,6 +82,7 @@ export interface SyncPullCommandResponse {
 export interface SyncUploadStats {
   uploaded: number;
   duplicate: number;
+  skipped: number;
   rejected: number;
   batches: number;
   hasMore: boolean;
