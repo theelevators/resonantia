@@ -19,7 +19,9 @@
   export let handleTelescopeDialKeydown: (event: KeyboardEvent) => void = () => {};
   export let handleTelescopeEyeKeydown: (event: KeyboardEvent) => void = () => {};
   export let selectTelescopeSession: (session: GraphSessionDto) => void = () => {};
+  export let renameTelescopeSession: (session: GraphSessionDto) => void = () => {};
   export let telescopeSessionColor: (session: GraphSessionDto, alpha?: number) => string = () => 'rgba(255,255,255,0.6)';
+  export let telescopeSessionTitle: (session: GraphSessionDto) => string = (session) => session.label;
   export let telescopeSessionMeta: (session: GraphSessionDto) => string = () => '';
   export let telescopeSessionDateLabel: (timestamp: string) => string = () => '';
   export let shortLabel: (text: string, words: number) => string = (text) => text;
@@ -140,21 +142,38 @@
           <p class="telescope-empty">no sessions in this range</p>
         {:else}
           {#each telescopeTimelineSessions as session}
-            <button
+            <div
               class="telescope-item"
               on:click={() => selectTelescopeSession(session)}
-              title={session.label}
+              on:keydown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  selectTelescopeSession(session);
+                }
+              }}
+              role="button"
+              tabindex="0"
+              title={telescopeSessionTitle(session)}
             >
               <i
                 class="telescope-dot"
                 style={`background:${telescopeSessionColor(session)}; box-shadow: 0 0 7px ${telescopeSessionColor(session, 0.4)};`}
               ></i>
               <span class="telescope-copy">
-                <span class="telescope-title">{shortLabel(session.label, 4)}</span>
+                <span class="telescope-title">{shortLabel(telescopeSessionTitle(session), 4)}</span>
                 <span class="telescope-meta">{telescopeSessionMeta(session)}</span>
               </span>
+              <button
+                class="telescope-rename"
+                type="button"
+                title="rename session"
+                aria-label={`rename ${telescopeSessionTitle(session)}`}
+                on:click|stopPropagation={() => renameTelescopeSession(session)}
+              >
+                rename
+              </button>
               <span class="telescope-date">{telescopeSessionDateLabel(session.lastModified)}</span>
-            </button>
+            </div>
           {/each}
         {/if}
       </div>
@@ -357,7 +376,7 @@
 
   .telescope-item {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
     align-items: center;
     gap: 7px;
     width: 100%;
@@ -415,6 +434,24 @@
     color: rgba(120, 110, 180, 0.42);
     white-space: nowrap;
     padding-right: 2px;
+  }
+
+  .telescope-rename {
+    border: 0.5px solid rgba(167, 193, 255, 0.28);
+    background: rgba(70, 83, 121, 0.22);
+    border-radius: 999px;
+    color: rgba(205, 220, 255, 0.9);
+    font-size: 8px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+  }
+
+  .telescope-rename:hover {
+    border-color: rgba(198, 216, 255, 0.56);
+    background: rgba(88, 104, 150, 0.34);
   }
 
   .telescope-empty {

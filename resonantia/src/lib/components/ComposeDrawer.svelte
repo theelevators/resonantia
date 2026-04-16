@@ -42,6 +42,177 @@
   export let saveComposePastedNode: () => Promise<void> | void = () => {};
   export let submitCompose: () => Promise<void> | void = () => {};
 
+  let pasteInputEl: HTMLTextAreaElement | null = null;
+  let pastePreviewEl: HTMLDivElement | null = null;
+  let pastePrettyView = false;
+
+  const STTP_KEYWORDS = new Set([
+    'manual',
+    'scheduled',
+    'threshold',
+    'resonance',
+    'seed',
+    'raw',
+    'daily',
+    'weekly',
+    'monthly',
+    'quarterly',
+    'yearly',
+    'null',
+  ]);
+  const STTP_TOKEN_RE = /(⏣|⊕⟨|⦿⟨|◈⟨|⍉⟨|⟩|[{}]|[A-Za-z_][A-Za-z0-9_]*(?:\(\.[0-9]+\))?(?=\s*:)|\b\d+(?:\.\d+)?\b)/g;
+
+  $: pastePreviewSource = pastePrettyView ? prettifySttpVisual(pasteNodeDraft) : pasteNodeDraft;
+  $: pasteNodePreviewHtml = renderPasteNodePreview(pastePreviewSource);
+
+  $: if (pasteNodeOpen || mode === 'importare') {
+    queueMicrotask(syncPasteEditorScroll);
+  }
+
+  function syncPasteEditorScroll() {
+    if (!pasteInputEl || !pastePreviewEl) {
+      return;
+    }
+
+    pastePreviewEl.scrollTop = pasteInputEl.scrollTop;
+    pastePreviewEl.scrollLeft = pasteInputEl.scrollLeft;
+  }
+
+  function togglePastePrettyView() {
+    pastePrettyView = !pastePrettyView;
+    queueMicrotask(syncPasteEditorScroll);
+  }
+
+  function prettifySttpVisual(raw: string): string {
+    const source = raw.trim();
+    if (!source) {
+      return raw;
+    }
+
+    let result = '';
+    let indent = 0;
+
+    const appendIndent = () => {
+      if (result.endsWith('\n')) {
+        result += '  '.repeat(Math.max(indent, 0));
+      }
+    };
+
+    for (let i = 0; i < source.length; i++) {
+      const ch = source[i];
+
+      if (ch === '{') {
+        result += '{\n';
+        indent += 1;
+        appendIndent();
+        continue;
+      }
+
+      if (ch === '}') {
+        result = result.trimEnd();
+        indent = Math.max(0, indent - 1);
+        result += `\n${'  '.repeat(indent)}}`;
+        if (source[i + 1] && source[i + 1] !== '\n' && source[i + 1] !== '}' && source[i + 1] !== ',') {
+          result += '\n';
+          appendIndent();
+        }
+        continue;
+      }
+
+      if (ch === ',') {
+        result += ',\n';
+        appendIndent();
+        continue;
+      }
+
+      if (ch === '\n') {
+        result = result.trimEnd();
+        result += '\n';
+        appendIndent();
+        continue;
+      }
+
+      if (ch === ' ' && result.endsWith('\n')) {
+        continue;
+      }
+
+      result += ch;
+    }
+
+    return result.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  function escapeHtml(value: string): string {
+    return value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  function highlightSttpLine(line: string): string {
+    if (!line) {
+      return '&nbsp;';
+    }
+
+    let result = '';
+    let cursor = 0;
+
+    for (const match of line.matchAll(STTP_TOKEN_RE)) {
+      const token = match[0];
+      const tokenIndex = match.index ?? 0;
+      result += escapeHtml(line.slice(cursor, tokenIndex));
+      cursor = tokenIndex + token.length;
+
+      if (token === '⏣' || token === '⊕⟨' || token === '⦿⟨' || token === '◈⟨' || token === '⍉⟨' || token === '⟩') {
+        result += `<span class="sttp-marker">${token}</span>`;
+        continue;
+      }
+
+      if (token === '{' || token === '}') {
+        result += `<span class="sttp-brace">${token}</span>`;
+        continue;
+      }
+
+      if (/^\d/.test(token)) {
+        result += `<span class="sttp-number">${token}</span>`;
+        continue;
+      }
+
+      if (STTP_KEYWORDS.has(token)) {
+        result += `<span class="sttp-keyword">${token}</span>`;
+        continue;
+      }
+
+      const confidenceIndex = token.indexOf('(.');
+      if (confidenceIndex > -1 && token.endsWith(')')) {
+        const base = token.slice(0, confidenceIndex);
+        const confidence = token.slice(confidenceIndex);
+        result += `<span class="sttp-key">${base}</span><span class="sttp-confidence">${confidence}</span>`;
+      } else {
+        result += `<span class="sttp-key">${token}</span>`;
+      }
+    }
+
+    if (cursor < line.length) {
+      result += escapeHtml(line.slice(cursor));
+    }
+
+    return result;
+  }
+
+  function renderPasteNodePreview(draft: string): string {
+    if (!draft.trim()) {
+      return '<span class="sttp-empty">highlighted preview appears here</span>';
+    }
+
+    return draft
+      .split('\n')
+      .map((line) => highlightSttpLine(line))
+      .join('\n');
+  }
+
   function composeOutcomeLabel(status: 'created' | 'updated' | 'duplicate' | 'skipped', duplicateSkipped: boolean) {
     if (duplicateSkipped || status === 'duplicate' || status === 'skipped') {
       return 'already present · duplicate skipped';
@@ -141,12 +312,31 @@
     {#if mode === 'importare' || pasteNodeOpen}
       <div class="compose-paste-panel">
         <p class="compose-paste-intro">paste a complete STTP node and save it directly.</p>
-        <textarea
-          class="drawer-textarea compose-paste-input"
-          placeholder="paste one full STTP node"
-          bind:value={pasteNodeDraft}
-          rows="9"
-        ></textarea>
+        <div class="compose-paste-toolbar">
+          <button class="compose-link-btn" type="button" on:click={togglePastePrettyView}>
+            {pastePrettyView ? 'pretty view on' : 'pretty view off'}
+          </button>
+          {#if pastePrettyView}
+            <span class="compose-paste-mode-note">visual only</span>
+          {/if}
+        </div>
+        <div class="compose-paste-editor" class:pretty={pastePrettyView}>
+          <div class="compose-paste-preview-wrap" bind:this={pastePreviewEl} aria-hidden="true">
+            <pre class="compose-paste-preview">{@html pasteNodePreviewHtml}</pre>
+          </div>
+          {#if !pastePrettyView}
+            <textarea
+              class="drawer-textarea compose-paste-input compose-paste-input-highlighted"
+              placeholder="paste one full STTP node"
+              bind:this={pasteInputEl}
+              bind:value={pasteNodeDraft}
+              rows="9"
+              wrap="soft"
+              on:input={syncPasteEditorScroll}
+              on:scroll={syncPasteEditorScroll}
+            ></textarea>
+          {/if}
+        </div>
         <div class="compose-paste-actions">
           {#if mode === 'live'}
             <button class="drawer-btn cancel" on:click={toggleComposePasteNode} disabled={pasteNodeLoading}>cancel paste</button>
@@ -361,12 +551,125 @@
   }
 
   .compose-paste-input {
-    min-height: 168px;
+    min-height: 184px;
     margin-bottom: 0;
+  }
+
+  .compose-paste-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 7px;
+  }
+
+  .compose-paste-mode-note {
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    text-transform: lowercase;
+    color: rgba(168, 188, 230, 0.74);
+  }
+
+  .compose-paste-editor {
+    position: relative;
+    min-height: 184px;
+    margin-bottom: 0;
+    min-width: 0;
+  }
+
+  .compose-paste-editor.pretty {
+    border: 0.5px solid rgba(170, 193, 240, 0.24);
+    border-radius: 6px;
+    box-shadow: inset 0 0 0 1px rgba(112, 142, 204, 0.12);
+  }
+
+  .compose-paste-preview-wrap {
+    position: absolute;
+    inset: 0;
+    border: 0.5px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    background: rgba(7, 8, 12, 0.9);
+    overflow: auto;
+    pointer-events: none;
+  }
+
+  .compose-paste-preview {
+    margin: 0;
+    padding: 8px 10px;
+    font-size: 11px;
+    line-height: 1.45;
+    color: rgba(233, 235, 242, 0.88);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    min-height: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .compose-paste-preview :global(span) {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .compose-paste-preview :global(.sttp-empty) {
+    color: rgba(255, 255, 255, 0.38);
+    font-style: italic;
+  }
+
+  .compose-paste-preview :global(.sttp-marker) {
+    color: #f7c97b;
+  }
+
+  .compose-paste-preview :global(.sttp-brace) {
+    color: rgba(214, 221, 255, 0.82);
+  }
+
+  .compose-paste-preview :global(.sttp-key) {
+    color: #7cc6ff;
+  }
+
+  .compose-paste-preview :global(.sttp-confidence) {
+    color: #ffd68f;
+  }
+
+  .compose-paste-preview :global(.sttp-number) {
+    color: #8be6a8;
+  }
+
+  .compose-paste-preview :global(.sttp-keyword) {
+    color: #d9a7ff;
   }
 
   .drawer-compose.importare .compose-paste-input {
     min-height: 224px;
+  }
+
+  .drawer-compose.importare .compose-paste-editor {
+    min-height: 224px;
+  }
+
+  .compose-paste-input-highlighted {
+    position: relative;
+    z-index: 1;
+    background: transparent;
+    border-color: rgba(255, 255, 255, 0.14);
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    caret-color: rgba(244, 247, 255, 0.92);
+  }
+
+  .compose-paste-input-highlighted::selection {
+    background: rgba(143, 183, 255, 0.28);
+  }
+
+  .compose-paste-input-highlighted::placeholder {
+    color: transparent;
+  }
+
+  .compose-paste-editor.pretty .compose-paste-preview-wrap {
+    position: relative;
+    border: none;
+    border-radius: 6px;
   }
 
   .compose-paste-actions {

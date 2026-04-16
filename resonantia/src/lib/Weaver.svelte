@@ -102,6 +102,12 @@
   let adventureCompleted = false;
   let adventureHydrated = false;
   let hasGraphData = false;
+  let renameSessionOpen = false;
+  let renameSessionTargetId: string | null = null;
+  let renameSessionFallback = '';
+  let renameSessionDraft = '';
+  let renameSessionError: string | null = null;
+  let renameSessionLoading = false;
 
   type WalkthroughMode = 'first-run' | 'demo';
   type WalkthroughStep = 'intro' | 'settings' | 'checkin' | 'telescope' | 'importare' | 'live' | 'complete';
@@ -321,6 +327,128 @@
 
   function sessionKey(sessionId: string): string {
     return sessionId.startsWith('s:') ? sessionId : `s:${sessionId}`;
+  }
+
+  function canonicalSessionId(session: GraphSessionDto | null | undefined): string {
+    if (!session) {
+      return '';
+    }
+
+    const label = session.label.trim();
+    if (label) {
+      return label;
+    }
+
+    return session.id.startsWith('s:') ? session.id.slice(2) : session.id;
+  }
+
+  function sessionTitle(session: GraphSessionDto): string {
+    return canonicalSessionId(session);
+  }
+
+  function openRenameSessionDialog(session: GraphSessionDto) {
+    noteInteraction();
+    renameSessionTargetId = session.id;
+    renameSessionFallback = canonicalSessionId(session);
+    renameSessionDraft = renameSessionFallback;
+    renameSessionError = null;
+    renameSessionLoading = false;
+    renameSessionOpen = true;
+  }
+
+  function closeRenameSessionDialog() {
+    renameSessionOpen = false;
+    renameSessionTargetId = null;
+    renameSessionFallback = '';
+    renameSessionDraft = '';
+    renameSessionError = null;
+    renameSessionLoading = false;
+  }
+
+  async function submitRenameSessionDialog() {
+    const targetId = renameSessionTargetId;
+    if (!targetId) {
+      closeRenameSessionDialog();
+      return;
+    }
+
+    const fallback = renameSessionFallback || canonicalSessionId(sessionById.get(targetId) ?? null);
+    const trimmed = renameSessionDraft.trim();
+
+    if (trimmed.length > 96) {
+      renameSessionError = 'session id max length is 96 characters';
+      return;
+    }
+
+    if (!trimmed) {
+      renameSessionError = 'target session id is required';
+      return;
+    }
+
+    if (trimmed === fallback) {
+      closeRenameSessionDialog();
+      return;
+    }
+
+    renameSessionLoading = true;
+    renameSessionError = null;
+
+    try {
+      const config = await resonantiaClient.getConfig();
+      const configuredGateway = (config.gatewayBaseUrl ?? '').trim();
+      const usingManagedGateway = isManagedGatewayBaseUrl(configuredGateway);
+      let syncAuthToken = (config.gatewayAuthToken ?? '').trim();
+
+      await resonantiaClient.renameSession({
+        sourceSessionId: fallback,
+        targetSessionId: trimmed,
+        allowMerge: false,
+      });
+
+      if (configuredGateway) {
+        if (usingManagedGateway) {
+          try {
+            await refreshGatewayAuthTokenForSync();
+            const refreshed = await resonantiaClient.getConfig();
+            syncAuthToken = (refreshed.gatewayAuthToken ?? '').trim();
+          } catch (tokenError) {
+            cloudAuthError = String(tokenError);
+          }
+        }
+
+        try {
+          await renameSessionInGateway(configuredGateway, syncAuthToken, fallback, trimmed);
+        } catch (cloudError) {
+          try {
+            await resonantiaClient.renameSession({
+              sourceSessionId: trimmed,
+              targetSessionId: fallback,
+              allowMerge: true,
+            });
+          } catch (rollbackError) {
+            renameSessionError = `cloud rename failed and rollback failed: ${String(cloudError)} | rollback: ${String(rollbackError)}`;
+            return;
+          }
+
+          renameSessionError = `cloud rename failed: ${String(cloudError)}`;
+          return;
+        }
+      }
+
+      if (composeSessionId.trim() === fallback) {
+        composeSessionId = trimmed;
+      }
+      if (calibSessionId.trim() === fallback) {
+        calibSessionId = trimmed;
+      }
+
+      await loadGraph();
+      closeRenameSessionDialog();
+    } catch (err) {
+      renameSessionError = String(err);
+    } finally {
+      renameSessionLoading = false;
+    }
   }
 
   $: sessionById = graph
@@ -1101,7 +1229,7 @@
   }
 
   function waveTitle(session: GraphSessionDto): string {
-    return shortLabel(session.label, 3);
+    return shortLabel(sessionTitle(session), 3);
   }
 
   // ── Navigation ────────────────────────────────────────────────
@@ -1218,6 +1346,7 @@
     composeOpen = false;
     calibrateOpen = false;
     settingsOpen = false;
+    closeRenameSessionDialog();
   }
 
   function handleNavigate(e: CustomEvent<{ sessionId: string }>) {
@@ -2030,6 +2159,7 @@
   let advancedOpen = false;
   let localModelOriginWarning: string | null = null;
   const MANAGED_GATEWAY_BASE_URL = getManagedGatewayBaseUrl().trim();
+  const GATEWAY_RENAME_SESSION_PATHS = ['/api/v1/session/rename', '/api/session/rename', '/session/rename'];
 
   function normalizeGatewayForCompare(value: string) {
     return value.trim().replace(/\/+$/, '');
@@ -2060,6 +2190,49 @@
   function isLoopbackHostName(hostname: string) {
     const normalized = hostname.trim().toLowerCase();
     return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || normalized === '[::1]';
+  }
+
+  function normalizeGatewayBaseUrl(value: string) {
+    return value.trim().replace(/\/+$/, '');
+  }
+
+  function gatewayRenameUrls(baseUrl: string) {
+    const normalized = normalizeGatewayBaseUrl(baseUrl);
+    return GATEWAY_RENAME_SESSION_PATHS.map((path) => `${normalized}${path}`);
+  }
+
+  async function renameSessionInGateway(baseUrl: string, authToken: string, sourceSessionId: string, targetSessionId: string) {
+    const urls = gatewayRenameUrls(baseUrl);
+    const payload = {
+      sourceSessionId,
+      targetSessionId,
+      allowMerge: false,
+    };
+
+    for (let index = 0; index < urls.length; index += 1) {
+      const url = urls[index];
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken.trim() ? { Authorization: `Bearer ${authToken.trim()}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.status === 404 && index < urls.length - 1) {
+        continue;
+      }
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(`gateway rename failed: ${response.status} ${body}`.trim());
+      }
+
+      return;
+    }
+
+    throw new Error('gateway rename failed: no compatible rename endpoint found');
   }
 
   function localModelWarningForCurrentOrigin(baseUrl: string): string | null {
@@ -2847,7 +3020,7 @@
   function openCompose(mode: 'live' | 'importare' = 'live') {
     composeModeMenuOpen = false;
     composeMode = mode;
-    composeSessionId = selectedSession?.label ?? '';
+    composeSessionId = canonicalSessionId(selectedSession);
     composeDraft = '';
     composeMessages = [];
     composeError = null;
@@ -3252,7 +3425,7 @@
   function openCalibrate() {
     markWalkthroughStepSatisfied('checkin');
     menuOpen = false;
-    calibSessionId = selectedSession?.label ?? '';
+    calibSessionId = canonicalSessionId(selectedSession);
     calibError = null;
     guideOpen = false;
     resetCalibrationGuide();
@@ -3710,11 +3883,57 @@
     handleTelescopeDialKeydown={handleTelescopeDialKeydown}
     handleTelescopeEyeKeydown={handleTelescopeEyeKeydown}
     selectTelescopeSession={selectTelescopeSession}
+    renameTelescopeSession={openRenameSessionDialog}
     telescopeSessionColor={telescopeSessionColor}
+    telescopeSessionTitle={sessionTitle}
     telescopeSessionMeta={telescopeSessionMeta}
     telescopeSessionDateLabel={telescopeSessionDateLabel}
     shortLabel={shortLabel}
   />
+
+  {#if renameSessionOpen}
+    <div
+      class="rename-session-overlay"
+      role="presentation"
+      on:pointerdown={(event) => {
+        if (event.target === event.currentTarget) {
+          closeRenameSessionDialog();
+        }
+      }}
+    >
+      <div class="rename-session-card" role="dialog" aria-modal="true" aria-label="rename wave">
+        <h3 class="rename-session-title">rename wave</h3>
+        <p class="rename-session-subtitle">persisted rename · updates local store and sync scope</p>
+        <input
+          class="rename-session-input"
+          type="text"
+          bind:value={renameSessionDraft}
+          maxlength="96"
+          disabled={renameSessionLoading}
+          on:input={() => (renameSessionError = null)}
+          on:keydown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              closeRenameSessionDialog();
+            }
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              void submitRenameSessionDialog();
+            }
+          }}
+        />
+        {#if renameSessionError}
+          <p class="rename-session-error">{renameSessionError}</p>
+        {/if}
+        <div class="rename-session-actions">
+          <button class="rename-session-btn ghost" type="button" on:click={closeRenameSessionDialog} disabled={renameSessionLoading}>cancel</button>
+          <button class="rename-session-btn" type="button" on:click={() => void submitRenameSessionDialog()} disabled={renameSessionLoading}>
+            {renameSessionLoading ? 'saving…' : 'save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <ComposeDrawer
     open={composeOpen}
@@ -3919,5 +4138,104 @@
     border-color: rgba(233, 148, 58, 0.58);
     background: rgba(233, 148, 58, 0.94);
     box-shadow: 0 0 8px rgba(233, 148, 58, 0.46);
+  }
+
+  .rename-session-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 24;
+    background: radial-gradient(circle at 52% 44%, rgba(20, 26, 42, 0.26), rgba(5, 7, 11, 0.72));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+  }
+
+  .rename-session-card {
+    width: min(420px, calc(100vw - 36px));
+    border-radius: 14px;
+    padding: 18px;
+    border: 0.5px solid rgba(210, 222, 255, 0.16);
+    background: linear-gradient(170deg, rgba(13, 18, 30, 0.94), rgba(9, 12, 19, 0.95));
+    box-shadow: 0 20px 42px rgba(2, 4, 9, 0.5), 0 0 18px rgba(118, 156, 238, 0.18);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  .rename-session-title {
+    margin: 0;
+    font-family: 'Fraunces', Georgia, serif;
+    font-weight: 300;
+    font-style: italic;
+    font-size: 18px;
+    letter-spacing: 0.03em;
+    color: rgba(236, 241, 255, 0.9);
+  }
+
+  .rename-session-subtitle {
+    margin: 8px 0 12px;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: rgba(180, 194, 226, 0.62);
+    text-transform: lowercase;
+  }
+
+  .rename-session-input {
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 9px;
+    border: 0.5px solid rgba(167, 186, 228, 0.22);
+    background: rgba(11, 14, 22, 0.86);
+    color: rgba(233, 239, 255, 0.92);
+    font-family: 'Departure Mono', 'Courier New', monospace;
+    font-size: 12px;
+    padding: 9px 12px;
+    outline: none;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease;
+  }
+
+  .rename-session-input:focus {
+    border-color: rgba(186, 210, 255, 0.58);
+    box-shadow: 0 0 0 1px rgba(157, 193, 255, 0.22);
+  }
+
+  .rename-session-error {
+    margin: 8px 0 0;
+    color: rgba(255, 152, 152, 0.82);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: lowercase;
+  }
+
+  .rename-session-actions {
+    margin-top: 13px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .rename-session-btn {
+    border-radius: 999px;
+    border: 0.5px solid rgba(173, 197, 255, 0.36);
+    background: rgba(53, 71, 108, 0.42);
+    color: rgba(223, 233, 255, 0.92);
+    font-family: 'Departure Mono', 'Courier New', monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+  }
+
+  .rename-session-btn:hover {
+    border-color: rgba(210, 224, 255, 0.68);
+    background: rgba(78, 101, 147, 0.5);
+  }
+
+  .rename-session-btn.ghost {
+    border-color: rgba(132, 147, 187, 0.26);
+    background: rgba(43, 52, 75, 0.3);
+    color: rgba(192, 204, 231, 0.78);
   }
 </style>

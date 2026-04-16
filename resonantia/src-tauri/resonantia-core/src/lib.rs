@@ -89,6 +89,9 @@ const GATEWAY_STORE_CONTEXT_PATH: &str = "/api/v1/store";
 const GATEWAY_PAGE_OVERSCAN: usize = 3;
 const GATEWAY_DOWNLOAD_CONNECTOR_ID: &str = "gateway:download";
 const GATEWAY_DOWNLOAD_SOURCE_KIND: &str = "resonantia-gateway";
+const DEFAULT_TENANT_ID: &str = "default";
+const TENANT_SCOPE_PREFIX: &str = "tenant:";
+const TENANT_SCOPE_SEPARATOR: &str = "::session:";
 
 struct SttpRuntime {
     store: Arc<dyn NodeStore>,
@@ -438,6 +441,25 @@ pub struct HealthResponse {
 pub struct StoreContextRequest {
     node: String,
     session_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameSessionRequest {
+    source_session_id: String,
+    target_session_id: String,
+    #[serde(default)]
+    allow_merge: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameSessionResponse {
+    source_session_id: String,
+    target_session_id: String,
+    moved_nodes: i32,
+    moved_calibrations: i32,
+    scopes_applied: i32,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -800,6 +822,16 @@ fn join_url(base_url: &str, path: &str) -> Result<String, String> {
 
 fn map_err(prefix: &str, err: impl std::fmt::Display) -> String {
     format!("{prefix}: {err}")
+}
+
+fn tenant_id_from_session_id(session_id: &str) -> String {
+    session_id
+        .strip_prefix(TENANT_SCOPE_PREFIX)
+        .and_then(|remainder| remainder.split_once(TENANT_SCOPE_SEPARATOR))
+        .map(|(tenant, _)| tenant)
+        .filter(|tenant| !tenant.trim().is_empty())
+        .unwrap_or(DEFAULT_TENANT_ID)
+        .to_string()
 }
 
 fn block_on_sync<T>(future: impl std::future::Future<Output = T>) -> Result<T, String> {
@@ -2554,6 +2586,87 @@ pub async fn store_context(
         validation_error: None,
         duplicate_skipped: is_duplicate_upsert_status(upsert.status),
         upsert_status: Some(node_upsert_status_label(upsert.status)),
+    })
+}
+
+pub async fn rename_session(
+    state: &AppState,
+    request: RenameSessionRequest,
+) -> Result<RenameSessionResponse, String> {
+    let runtime = sttp_runtime_handle(state)?;
+    let source_session_id = request.source_session_id.trim();
+    let target_session_id = request.target_session_id.trim();
+
+    if source_session_id.is_empty() || target_session_id.is_empty() {
+        return Err("source and target session ids are required".to_string());
+    }
+
+    if source_session_id == target_session_id {
+        return Ok(RenameSessionResponse {
+            source_session_id: source_session_id.to_string(),
+            target_session_id: target_session_id.to_string(),
+            moved_nodes: 0,
+            moved_calibrations: 0,
+            scopes_applied: 0,
+        });
+    }
+
+    let source_nodes = runtime
+        .store
+        .list_nodes_async(10_000, Some(source_session_id))
+        .await
+        .map_err(|err| map_err("failed to list source session nodes", err))?;
+
+    if source_nodes.is_empty() {
+        return Err(format!("source session not found: {source_session_id}"));
+    }
+
+    let mut anchor_node_ids = Vec::with_capacity(source_nodes.len());
+    for node in source_nodes {
+        let upsert = runtime
+            .store
+            .upsert_node_async(node)
+            .await
+            .map_err(|err| map_err("failed to resolve source scope anchors", err))?;
+        anchor_node_ids.push(upsert.node_id);
+    }
+    anchor_node_ids.sort();
+    anchor_node_ids.dedup();
+
+    let target_tenant_id = tenant_id_from_session_id(target_session_id);
+    let rekey = runtime
+        .store
+        .batch_rekey_scopes_async(
+            anchor_node_ids,
+            &target_tenant_id,
+            target_session_id,
+            false,
+            request.allow_merge,
+        )
+        .await
+        .map_err(|err| map_err("session rekey failed", err))?;
+
+    let scope_conflict = rekey.scopes.iter().find(|scope| scope.conflict);
+    if let Some(conflict) = scope_conflict {
+        let message = conflict
+            .message
+            .clone()
+            .unwrap_or_else(|| "target session already exists".to_string());
+        return Err(message);
+    }
+
+    let scopes_applied = rekey
+        .scopes
+        .iter()
+        .filter(|scope| scope.applied)
+        .count() as i32;
+
+    Ok(RenameSessionResponse {
+        source_session_id: source_session_id.to_string(),
+        target_session_id: target_session_id.to_string(),
+        moved_nodes: rekey.temporal_nodes_updated as i32,
+        moved_calibrations: rekey.calibrations_updated as i32,
+        scopes_applied,
     })
 }
 

@@ -18,9 +18,9 @@ use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use sha2::Sha256;
 use resonantia_core::{
     create_app_state, get_health, get_graph, initialize_app_state, initialize_app_state_remote_strict,
-    list_nodes, store_context,
+    list_nodes, rename_session, store_context,
     AppState, GraphResponse, HealthResponse, ListNodesResponse, StoreContextRequest,
-    StoreContextResponse,
+    StoreContextResponse, RenameSessionRequest, RenameSessionResponse,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -421,6 +421,9 @@ async fn main() {
         .route("/api/v1/store", post(store_handler))
         .route("/api/store", post(store_handler))
         .route("/store", post(store_handler))
+        .route("/api/v1/session/rename", post(rename_session_handler))
+        .route("/api/session/rename", post(rename_session_handler))
+        .route("/session/rename", post(rename_session_handler))
         .route("/api/v1/nodes", get(list_nodes_handler))
         .route("/api/nodes", get(list_nodes_handler))
         .route("/nodes", get(list_nodes_handler))
@@ -830,6 +833,18 @@ async fn store_handler(
     let response = store_context(&tenant.state, request)
         .await
         .map_err(AppError::internal)?;
+    Ok(Json(response))
+}
+
+async fn rename_session_handler(
+    State(context): State<GatewayContext>,
+    headers: HeaderMap,
+    Json(request): Json<RenameSessionRequest>,
+) -> Result<Json<RenameSessionResponse>, AppError> {
+    let tenant = resolve_sync_tenant_context(&context, &headers).await?;
+    let response = rename_session(&tenant.state, request)
+        .await
+        .map_err(AppError::bad_request)?;
     Ok(Json(response))
 }
 

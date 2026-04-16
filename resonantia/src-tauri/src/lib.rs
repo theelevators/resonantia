@@ -85,6 +85,14 @@ async fn store_context(
 }
 
 #[tauri::command]
+async fn rename_session(
+    state: tauri::State<'_, core::AppState>,
+    request: core::RenameSessionRequest,
+) -> Result<core::RenameSessionResponse, String> {
+    core::rename_session(state.inner(), request).await
+}
+
+#[tauri::command]
 async fn sync_pull(
     state: tauri::State<'_, core::AppState>,
     request: core::SyncPullCommandRequest,
@@ -170,6 +178,7 @@ pub fn run() {
             list_nodes,
             get_graph,
             store_context,
+            rename_session,
             sync_pull,
             sync_now,
             calibrate_session,

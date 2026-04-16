@@ -11,9 +11,11 @@ The goal is compatibility for custom gateways and OSS alternatives (for example
 - Minimum compatible (sync only):
   - `GET /api/v1/nodes`
   - `POST /api/v1/store`
+  - `POST /api/v1/session/rename`
   - Optional aliases for older clients:
     - `GET /api/nodes`, `GET /nodes`
     - `POST /api/store`, `POST /store`
+    - `POST /api/session/rename`, `POST /session/rename`
 
 - Full hosted-compatible:
   - Sync routes above, plus:
@@ -156,6 +158,35 @@ Response 200 JSON:
 - `updated`
 - `duplicate`
 - `skipped`
+
+## `POST /api/v1/session/rename`
+
+Legacy aliases:
+
+- `POST /api/session/rename`
+- `POST /session/rename`
+
+Request JSON:
+
+```json
+{
+  "sourceSessionId": "old-session",
+  "targetSessionId": "new-session",
+  "allowMerge": false
+}
+```
+
+Response 200 JSON:
+
+```json
+{
+  "sourceSessionId": "old-session",
+  "targetSessionId": "new-session",
+  "movedNodes": 18,
+  "movedCalibrations": 1,
+  "scopesApplied": 1
+}
+```
 
 ## `GET /api/v1/graph`
 

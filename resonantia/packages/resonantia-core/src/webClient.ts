@@ -10,6 +10,8 @@ import type {
   EncodeComposeRequest,
   HealthResponse,
   ListNodesResponse,
+  RenameSessionInput,
+  RenameSessionResponse,
   ResonantiaClient,
   StoreContextInput,
   SyncNowRequest,
@@ -1140,6 +1142,11 @@ async function upsertAny(db: Surreal, target: string, content: unknown): Promise
   await upsertBuilder.content(content as Record<string, unknown>);
 }
 
+async function deleteAny(db: Surreal, target: string): Promise<void> {
+  const deleter = db as unknown as { delete: (resource: string | StringRecordId) => Promise<unknown> };
+  await deleter.delete(toResource(target));
+}
+
 function toResource(target: string): string | StringRecordId {
   const separator = target.indexOf(":");
   const looksLikeRecordId = separator > 0 && separator < target.length - 1;
@@ -1972,6 +1979,78 @@ export function createWebResonantiaClient(): ResonantiaClient {
         validationError: null,
         duplicateSkipped: false,
         upsertStatus: "created",
+      };
+    },
+
+    async renameSession(input: RenameSessionInput): Promise<RenameSessionResponse> {
+      const sourceSessionId = input.sourceSessionId.trim();
+      const targetSessionId = input.targetSessionId.trim();
+      const allowMerge = Boolean(input.allowMerge);
+
+      if (!sourceSessionId || !targetSessionId) {
+        throw new Error("source and target session ids are required");
+      }
+
+      if (sourceSessionId === targetSessionId) {
+        return {
+          sourceSessionId,
+          targetSessionId,
+          movedNodes: 0,
+          movedCalibrations: 0,
+          scopesApplied: 0,
+        };
+      }
+
+      const db = await getDb();
+      const allNodes = await readAllNodes(db);
+      const sourceNodes = allNodes.filter((node) => node.sessionId === sourceSessionId);
+
+      if (sourceNodes.length === 0) {
+        throw new Error(`source session not found: ${sourceSessionId}`);
+      }
+
+      const targetHasNodes = allNodes.some((node) => node.sessionId === targetSessionId);
+      if (targetHasNodes && !allowMerge) {
+        throw new Error("target session already contains nodes; set allowMerge=true to merge");
+      }
+
+      const migratedNodes: NodeDto[] = [];
+
+      for (const node of sourceNodes) {
+        const migrated = normalizeNode({
+          ...node,
+          sessionId: targetSessionId,
+          syncKey: "",
+          syntheticId: "",
+        });
+
+        await upsertLocalNode(db, migrated);
+        await deleteAny(db, recordIdForNode(node.syncKey)).catch(() => undefined);
+        migratedNodes.push(migrated);
+      }
+
+      let movedCalibrations = 0;
+      const calibration = await readCalibrationState(db, sourceSessionId);
+      if (calibration) {
+        await upsertAny(db, recordIdForCalibration(targetSessionId), {
+          sessionId: targetSessionId,
+          currentAvec: calibration.currentAvec,
+          triggerHistory: calibration.triggerHistory,
+          updatedAt: nowIso(),
+        });
+        await deleteAny(db, recordIdForCalibration(sourceSessionId)).catch(() => undefined);
+        movedCalibrations = 1;
+      }
+
+      const untouched = allNodes.filter((node) => node.sessionId !== sourceSessionId);
+      writeNodesCacheToLocalStorage(mergeNodesBySyncKey(untouched, migratedNodes));
+
+      return {
+        sourceSessionId,
+        targetSessionId,
+        movedNodes: migratedNodes.length,
+        movedCalibrations,
+        scopesApplied: migratedNodes.length > 0 || movedCalibrations > 0 ? 1 : 0,
       };
     },
 

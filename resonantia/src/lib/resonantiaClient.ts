@@ -41,6 +41,7 @@ export const resonantiaClient: ResonantiaClient = {
   listNodes: (limit, sessionId) => withClient((client) => client.listNodes(limit, sessionId)),
   getGraph: (limit, sessionId) => withClient((client) => client.getGraph(limit, sessionId)),
   storeContext: (input) => withClient((client) => client.storeContext(input)),
+  renameSession: (input) => withClient((client) => client.renameSession(input)),
   syncPull: (request) => withClient((client) => client.syncPull(request)),
   syncNow: (request) => withClient((client) => client.syncNow(request)),
   calibrateSession: (input) => withClient((client) => client.calibrateSession(input)),

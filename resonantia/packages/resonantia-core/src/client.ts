@@ -55,6 +55,20 @@ export interface StoreContextInput {
   sessionId: string;
 }
 
+export interface RenameSessionInput {
+  sourceSessionId: string;
+  targetSessionId: string;
+  allowMerge?: boolean;
+}
+
+export interface RenameSessionResponse {
+  sourceSessionId: string;
+  targetSessionId: string;
+  movedNodes: number;
+  movedCalibrations: number;
+  scopesApplied: number;
+}
+
 export type ChatMessageRole = "system" | "user" | "assistant";
 
 export interface ChatMessage {
@@ -100,6 +114,7 @@ export interface ResonantiaClient {
   listNodes(limit: number, sessionId?: string): Promise<ListNodesResponse>;
   getGraph(limit: number, sessionId?: string): Promise<GraphResponse>;
   storeContext(input: StoreContextInput): Promise<StoreContextResponse>;
+  renameSession(input: RenameSessionInput): Promise<RenameSessionResponse>;
   syncPull(request: SyncPullRequest): Promise<SyncPullCommandResponse>;
   syncNow(request?: SyncNowRequest): Promise<SyncNowResponse>;
   calibrateSession(input: CalibrateSessionInput): Promise<CalibrateSessionResponse>;
@@ -131,6 +146,14 @@ export function createResonantiaClient(invokeCommand: CommandInvoker): Resonanti
         request: {
           node: input.node,
           sessionId: input.sessionId,
+        },
+      }),
+    renameSession: (input) =>
+      invokeCommand<RenameSessionResponse>("rename_session", {
+        request: {
+          sourceSessionId: input.sourceSessionId,
+          targetSessionId: input.targetSessionId,
+          allowMerge: input.allowMerge ?? false,
         },
       }),
     syncPull: (request) =>
