@@ -94,6 +94,12 @@ services:
       RESONANTIA_STRIPE_SUCCESS_URL: "${RESONANTIA_STRIPE_SUCCESS_URL:-https://account.resonantia.me?payment=success}"
       RESONANTIA_STRIPE_CANCEL_URL: "${RESONANTIA_STRIPE_CANCEL_URL:-https://account.resonantia.me?payment=cancelled}"
 
+      # Managed AI (gateway-side OpenAI)
+      RESONANTIA_OPENAI_API_KEY: "${RESONANTIA_OPENAI_API_KEY:-}"
+      RESONANTIA_OPENAI_MODEL: "${RESONANTIA_OPENAI_MODEL:-gpt-4o-mini}"
+      RESONANTIA_OPENAI_BASE_URL: "${RESONANTIA_OPENAI_BASE_URL:-https://api.openai.com/v1}"
+      RESONANTIA_AI_REQUIRE_SOULFUL_FOR_CHAT: "${RESONANTIA_AI_REQUIRE_SOULFUL_FOR_CHAT:-true}"
+
       # Log level (trace | debug | info | warn | error)
       RUST_LOG: "${RUST_LOG:-resonantia_gateway=info,tower_http=warn}"
 

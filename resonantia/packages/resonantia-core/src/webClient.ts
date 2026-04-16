@@ -10,6 +10,8 @@ import type {
   EncodeComposeRequest,
   HealthResponse,
   ListNodesResponse,
+  ModelProvider,
+  OpenAiByoKeyStatus,
   RenameSessionInput,
   RenameSessionResponse,
   ResonantiaClient,
@@ -54,8 +56,11 @@ const NODE_CACHE_LIMIT = 1200;
 
 const DEFAULT_GATEWAY_BASE_URL = (import.meta.env.VITE_GATEWAY_BASE_URL ?? '').trim();
 const DEFAULT_GATEWAY_AUTH_TOKEN = "";
+const DEFAULT_MODEL_PROVIDER: ModelProvider = "managed-gateway";
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 const DEFAULT_OLLAMA_MODEL = "gemma3";
+const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com";
+const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 const TRANSMUTE_PREAMBLE = transmutePreambleRaw.trim();
 const COMPOSE_CHAT_PREAMBLE = [
   "This is a chat conversation with Resonantia.",
@@ -118,6 +123,7 @@ Reference node:
 ⊕⟨ ⏣0{ trigger: manual, response_format: temporal_node, origin_session: sttp-core-rs-port, compression_depth: 2, parent_node: ref:495f590e11d84165bb8966711fe70a4d, prime: { attractor_config: { stability: 0.87, friction: 0.19, logic: 0.94, autonomy: 0.85 }, context_summary: cargo_aligned_and_pass_two_surreal_runtime_store_completed, relevant_tier: raw, retrieval_budget: 12 } } ⟩ ⦿⟨ ⏣0{ timestamp: 2026-04-10T00:00:00Z, tier: raw, session_id: sttp-core-rs-port, schema_version: sttp-1.0, user_avec: { stability: 0.90, friction: 0.15, logic: 0.91, autonomy: 0.80, psi: 2.76 }, model_avec: { stability: 0.87, friction: 0.19, logic: 0.94, autonomy: 0.85, psi: 2.85 } } ⟩ ◈⟨ ⏣0{ cargo_alignment(.99): crate_gitignore_added_for_target_and_cargo_lock, pass_two_scope(.99): surrealdb_client_trait_runtime_settings_node_store_models_and_tests, raw_query_preservation(.99): all_surreal_queries_retained_and_reused_by_store, new_tests(.98): surrealdb_node_store_3_and_runtime_2, verification(.99): cargo_test_green_all_suites, outcome(.98): sttp_core_rs_now_supports_runtime_surrealdb_storage_path_with_mockable_client } ⟩ ⍉⟨ ⏣0{ rho: 0.98, kappa: 0.97, psi: 2.85, compression_avec: { stability: 0.88, friction: 0.17, logic: 0.95, autonomy: 0.84, psi: 2.84 } } ⟩`.trim();
 const GATEWAY_STORE_PATHS = ["/api/v1/store", "/api/store", "/store"];
 const GATEWAY_NODES_PATHS = ["/api/v1/nodes", "/api/nodes", "/nodes"];
+const GATEWAY_AI_CHAT_PATHS = ["/api/v1/ai/chat", "/api/ai/chat", "/ai/chat"];
 const DEV_GATEWAY_PROXY_PATH = "/__gateway_proxy__";
 
 const TABLE_TEMPORAL_NODE = "temporal_node";
@@ -125,10 +131,13 @@ const TABLE_APP_CONFIG = "app_config";
 const TABLE_CALIBRATION = "calibration_state";
 
 const DEFAULT_CONFIG: AppConfig = {
+  modelProvider: DEFAULT_MODEL_PROVIDER,
   gatewayBaseUrl: DEFAULT_GATEWAY_BASE_URL,
   gatewayAuthToken: DEFAULT_GATEWAY_AUTH_TOKEN,
   ollamaBaseUrl: DEFAULT_OLLAMA_BASE_URL,
   ollamaModel: DEFAULT_OLLAMA_MODEL,
+  openaiBaseUrl: DEFAULT_OPENAI_BASE_URL,
+  openaiModel: DEFAULT_OPENAI_MODEL,
   layoutOverrides: {
     sessionOverrides: {},
     nodeOverrides: {},
@@ -148,6 +157,10 @@ type GatewayStoreOutcome = {
   valid: boolean;
   duplicate: boolean;
   validationError: string | null;
+};
+
+type GatewayAiChatResponse = {
+  content?: string;
 };
 
 type StorageMode = "indxdb" | "mem";
@@ -635,10 +648,13 @@ function mergeNodesBySyncKey(...groups: NodeDto[][]): NodeDto[] {
 
 function defaultConfig(): AppConfig {
   return {
+    modelProvider: DEFAULT_MODEL_PROVIDER,
     gatewayBaseUrl: DEFAULT_GATEWAY_BASE_URL,
     gatewayAuthToken: DEFAULT_GATEWAY_AUTH_TOKEN,
     ollamaBaseUrl: DEFAULT_OLLAMA_BASE_URL,
     ollamaModel: DEFAULT_OLLAMA_MODEL,
+    openaiBaseUrl: DEFAULT_OPENAI_BASE_URL,
+    openaiModel: DEFAULT_OPENAI_MODEL,
     layoutOverrides: {
       sessionOverrides: {},
       nodeOverrides: {},
@@ -978,14 +994,25 @@ function normalizeConfig(input: unknown): AppConfig {
   const record = asRecord(input);
   const layoutOverrides = readObject(record, "layoutOverrides", "layout_overrides");
   // Empty/cleared gateway URL should fall back to the managed default.
+  const providerRaw = readString(record, "modelProvider", "model_provider").trim();
   const gatewayRaw = readString(record, "gatewayBaseUrl", "gateway_base_url") || DEFAULT_GATEWAY_BASE_URL;
   const gatewayAuthRaw = readString(record, "gatewayAuthToken", "gateway_auth_token") || DEFAULT_GATEWAY_AUTH_TOKEN;
+  const openaiBaseUrlRaw = readString(record, "openaiBaseUrl", "openai_base_url") || DEFAULT_OPENAI_BASE_URL;
+  const openaiModelRaw = readString(record, "openaiModel", "openai_model") || DEFAULT_OPENAI_MODEL;
+
+  const modelProvider: ModelProvider =
+    providerRaw === "ollama" || providerRaw === "openai-byo" || providerRaw === "managed-gateway"
+      ? providerRaw
+      : DEFAULT_MODEL_PROVIDER;
 
   return {
+    modelProvider,
     gatewayBaseUrl: normalizeGatewayBaseUrl(gatewayRaw),
     gatewayAuthToken: normalizeGatewayAuthToken(gatewayAuthRaw),
     ollamaBaseUrl: readString(record, "ollamaBaseUrl", "ollama_base_url") || DEFAULT_OLLAMA_BASE_URL,
     ollamaModel: readString(record, "ollamaModel", "ollama_model") || DEFAULT_OLLAMA_MODEL,
+    openaiBaseUrl: openaiBaseUrlRaw.trim() || DEFAULT_OPENAI_BASE_URL,
+    openaiModel: openaiModelRaw.trim() || DEFAULT_OPENAI_MODEL,
     layoutOverrides: {
       sessionOverrides: readObject(layoutOverrides, "sessionOverrides", "session_overrides") as Record<string, { x: number; y: number }>,
       nodeOverrides: readObject(layoutOverrides, "nodeOverrides", "node_overrides") as Record<string, { x: number; y: number }>,
@@ -1539,6 +1566,39 @@ function buildEncodePrompt(
   return parts.join("\n");
 }
 
+async function runGatewayAiChat(
+  config: AppConfig,
+  messages: ChatMessage[],
+  purpose: "chat" | "transmutation",
+): Promise<string | null> {
+  const baseUrl = normalizeGatewayBaseUrl(config.gatewayBaseUrl ?? "");
+  if (!baseUrl) {
+    return null;
+  }
+
+  const urls = gatewayPathsFor(baseUrl, GATEWAY_AI_CHAT_PATHS);
+  const response = await fetchGatewayWithFallback(urls, {
+    method: "POST",
+    headers: {
+      ...createGatewayHeaders(config.gatewayAuthToken, true),
+      "x-resonantia-client": "web",
+    },
+    body: JSON.stringify({
+      messages,
+      purpose,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`gateway ai failed: ${response.status} ${response.url} ${body}`.trim());
+  }
+
+  const parsed = (await response.json().catch(() => ({}))) as GatewayAiChatResponse;
+  const text = String(parsed.content ?? "").trim();
+  return text || null;
+}
+
 async function runOllamaChat(config: AppConfig, messages: ChatMessage[]): Promise<string | null> {
   const payload: OllamaChatRequest = {
     model: config.ollamaModel,
@@ -1583,6 +1643,31 @@ async function runOllamaChat(config: AppConfig, messages: ChatMessage[]): Promis
   }
 
   throw new Error(`ollama request failed: ${errorToString(lastError)}`);
+}
+
+async function runModelChat(
+  config: AppConfig,
+  messages: ChatMessage[],
+  purpose: "chat" | "transmutation",
+): Promise<string | null> {
+  if (config.modelProvider === "openai-byo") {
+    throw new Error("openai BYO keys are only available in the desktop app");
+  }
+
+  if (config.modelProvider === "ollama") {
+    return runOllamaChat(config, messages);
+  }
+
+  try {
+    const gatewayText = await runGatewayAiChat(config, messages, purpose);
+    if (gatewayText) {
+      return gatewayText;
+    }
+  } catch {
+    // Fall back to local model if managed gateway AI is unavailable.
+  }
+
+  return runOllamaChat(config, messages);
 }
 
 function parseAiResponse(text: string): AiSummary | null {
@@ -2226,10 +2311,10 @@ export function createWebResonantiaClient(): ResonantiaClient {
         return null;
       }
 
-      return runOllamaChat(config, [
+      return runModelChat(config, [
         { role: "system", content: COMPOSE_CHAT_PREAMBLE },
         ...conversation,
-      ]);
+      ], "chat");
     },
 
     async encodeCompose(request: EncodeComposeRequest): Promise<string> {
@@ -2245,7 +2330,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
         throw new Error("encode requires at least one chat message");
       }
 
-      const text = await runOllamaChat(config, [
+      const text = await runModelChat(config, [
         { role: "system", content: COMPOSE_ENCODE_PREAMBLE },
         ...conversation,
         {
@@ -2256,7 +2341,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
             request.previousNodeCandidate,
           ),
         },
-      ]);
+      ], "transmutation");
 
       if (!text) {
         throw new Error("model returned an empty encode response");
@@ -2274,15 +2359,57 @@ export function createWebResonantiaClient(): ResonantiaClient {
       const db = await getDb();
       const config = await readConfig(db);
 
-      const text = await runOllamaChat(config, [
+      const text = await runModelChat(config, [
         { role: "system", content: TRANSMUTE_PREAMBLE },
         { role: "user", content: rawNode },
-      ]);
+      ], "transmutation");
       if (!text) {
         return null;
       }
 
       return parseAiResponse(text);
+    },
+
+    async getOpenAiByoKeyStatus(): Promise<OpenAiByoKeyStatus> {
+      return {
+        configured: false,
+        source: "unsupported",
+      };
+    },
+
+    async setOpenAiByoKey(_key: string): Promise<void> {
+      throw new Error("openai BYO key storage is only supported in the desktop app");
+    },
+
+    async clearOpenAiByoKey(): Promise<void> {
+      return;
+    },
+
+    async setModelProvider(provider: ModelProvider): Promise<void> {
+      const { config: current, db } = await readConfigBestEffort();
+      const next: AppConfig = {
+        ...current,
+        modelProvider: provider,
+      };
+
+      writeConfigToLocalStorage(normalizeConfig(next));
+      if (db) {
+        await writeConfig(db, next);
+      }
+    },
+
+    async setOpenAiConfig(baseUrl?: string, model?: string): Promise<void> {
+      const { config: current, db } = await readConfigBestEffort();
+      const next: AppConfig = {
+        ...current,
+        openaiBaseUrl: baseUrl ?? current.openaiBaseUrl,
+        openaiModel: model ?? current.openaiModel,
+      };
+
+      writeConfigToLocalStorage(normalizeConfig(next));
+      if (db) {
+        await writeConfig(db, next);
+      }
     },
 
     async setOllamaConfig(baseUrl?: string, model?: string): Promise<void> {

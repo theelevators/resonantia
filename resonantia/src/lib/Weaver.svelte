@@ -23,7 +23,9 @@
     GraphNodeDto,
     HealthResponse,
     ListNodesResponse,
+    ModelProvider,
     NodeDto,
+    OpenAiByoKeyStatus,
     StoreContextResponse,
     SyncNowResponse,
     CollapseCardData,
@@ -2145,10 +2147,18 @@
   let settingsSaving = false;
   let settingsError: string | null = null;
   let settingsSaved = false;
+  let modelProvider: ModelProvider = 'managed-gateway';
   let ollamaBaseUrl = '';
   let ollamaModel = '';
+  let openaiBaseUrl = 'https://api.openai.com';
+  let openaiModel = 'gpt-4o-mini';
   let gatewayBaseUrl = '';
   let gatewayAuthToken = '';
+  let openaiByoKeyInput = '';
+  let openaiByoKeyConfigured = false;
+  let openaiByoKeySource: OpenAiByoKeyStatus['source'] = 'unsupported';
+  let openaiByoKeyBusy = false;
+  let openaiByoKeyError: string | null = null;
   let cloudAuthAvailable = false;
   let cloudAuthSignedIn = false;
   let cloudAuthBusy = false;
@@ -2261,6 +2271,18 @@
 
   $: localModelOriginWarning = localModelWarningForCurrentOrigin(ollamaBaseUrl);
 
+  async function refreshOpenAiByoKeyStatus() {
+    openaiByoKeyError = null;
+    try {
+      const status = await resonantiaClient.getOpenAiByoKeyStatus();
+      openaiByoKeyConfigured = status.configured;
+      openaiByoKeySource = status.source;
+    } catch {
+      openaiByoKeyConfigured = false;
+      openaiByoKeySource = 'unsupported';
+    }
+  }
+
   async function openSettings() {
     markWalkthroughStepSatisfied('settings');
     menuOpen = false;
@@ -2268,14 +2290,20 @@
     settingsLoading = true;
     settingsError = null;
     settingsSaved = false;
+    openaiByoKeyInput = '';
+    openaiByoKeyError = null;
 
     try {
       const config = await resonantiaClient.getConfig();
+      modelProvider = config.modelProvider;
       gatewayBaseUrl = displayGatewayInputFromConfig(config.gatewayBaseUrl ?? '');
       gatewayAuthToken = config.gatewayAuthToken ?? '';
       ollamaBaseUrl = config.ollamaBaseUrl;
       ollamaModel = config.ollamaModel;
+      openaiBaseUrl = config.openaiBaseUrl;
+      openaiModel = config.openaiModel;
       advancedOpen = false;
+      await refreshOpenAiByoKeyStatus();
       await refreshCloudAuthState();
     } catch (err) {
       settingsError = String(err);
@@ -2399,6 +2427,8 @@
 
     try {
       const gatewayInput = gatewayBaseUrl.trim();
+      await resonantiaClient.setModelProvider(modelProvider);
+      await resonantiaClient.setOpenAiConfig(openaiBaseUrl.trim(), openaiModel.trim());
       await resonantiaClient.setOllamaConfig(ollamaBaseUrl.trim(), ollamaModel.trim());
       await resonantiaClient.setGatewayBaseUrl(gatewayInput);
       await resonantiaClient.setGatewayAuthToken(gatewayAuthToken.trim());
@@ -2412,6 +2442,47 @@
       settingsError = String(err);
     } finally {
       settingsSaving = false;
+    }
+  }
+
+  async function saveOpenAiByoKey() {
+    const trimmed = openaiByoKeyInput.trim();
+    if (!trimmed || openaiByoKeyBusy) {
+      return;
+    }
+
+    openaiByoKeyBusy = true;
+    openaiByoKeyError = null;
+    settingsSaved = false;
+    try {
+      await resonantiaClient.setOpenAiByoKey(trimmed);
+      openaiByoKeyInput = '';
+      await refreshOpenAiByoKeyStatus();
+      settingsSaved = true;
+    } catch (err) {
+      openaiByoKeyError = String(err);
+    } finally {
+      openaiByoKeyBusy = false;
+    }
+  }
+
+  async function clearOpenAiByoKey() {
+    if (openaiByoKeyBusy) {
+      return;
+    }
+
+    openaiByoKeyBusy = true;
+    openaiByoKeyError = null;
+    settingsSaved = false;
+    try {
+      await resonantiaClient.clearOpenAiByoKey();
+      openaiByoKeyInput = '';
+      await refreshOpenAiByoKeyStatus();
+      settingsSaved = true;
+    } catch (err) {
+      openaiByoKeyError = String(err);
+    } finally {
+      openaiByoKeyBusy = false;
     }
   }
 
@@ -3033,6 +3104,41 @@
     composePromptCopied = false;
     composePromptCopyError = null;
     composePasteNodeOpen = mode === 'importare';
+    composePasteNodeDraft = '';
+    composePasteNodeLoading = false;
+    composeOpen = true;
+  }
+
+  function continueThreadInCompose(event: CustomEvent<{ sessionId: string; prompt: string }>) {
+    const sessionId = event.detail.sessionId.trim();
+    const prompt = event.detail.prompt.trim();
+    if (!sessionId || !prompt) {
+      return;
+    }
+
+    closeCard();
+
+    composeModeMenuOpen = false;
+    composeMode = 'live';
+    composeSessionId = sessionId;
+    composeDraft = '';
+    composeMessages = [
+      {
+        role: 'user',
+        content: prompt,
+        at: new Date().toISOString(),
+      },
+    ];
+    composeError = null;
+    composeResult = null;
+    composeLoading = false;
+    composeReplyLoading = false;
+    composeEncodePromptSent = false;
+    composePromptCopyLoading = false;
+    clearComposePromptCopiedTimer();
+    composePromptCopied = false;
+    composePromptCopyError = null;
+    composePasteNodeOpen = false;
     composePasteNodeDraft = '';
     composePasteNodeLoading = false;
     composeOpen = true;
@@ -3837,6 +3943,7 @@
     on:close={closeCard}
     on:navigate={handleNavigate}
     on:transmute={transmuteCurrentNode}
+    on:continueInApp={continueThreadInCompose}
   />
 
   <ComposeLauncher
@@ -4006,10 +4113,18 @@
     error={settingsError}
     saved={settingsSaved}
     localModelOriginWarning={localModelOriginWarning}
+    bind:modelProvider
     bind:ollamaBaseUrl
     bind:ollamaModel
+    bind:openaiBaseUrl
+    bind:openaiModel
     bind:gatewayBaseUrl
     bind:gatewayAuthToken
+    bind:openaiByoKeyInput
+    openaiByoKeyConfigured={openaiByoKeyConfigured}
+    openaiByoKeySource={openaiByoKeySource}
+    openaiByoKeyBusy={openaiByoKeyBusy}
+    openaiByoKeyError={openaiByoKeyError}
     cloudAuthAvailable={cloudAuthAvailable}
     cloudAuthSignedIn={cloudAuthSignedIn}
     cloudAuthBusy={cloudAuthBusy}
@@ -4024,6 +4139,8 @@
     on:connectCloud={connectCloudAccount}
     on:refreshCloudToken={refreshGatewayAuthToken}
     on:clearCloudToken={clearGatewayAuthToken}
+    on:saveOpenAiKey={saveOpenAiByoKey}
+    on:clearOpenAiKey={clearOpenAiByoKey}
   />
 </div>
 

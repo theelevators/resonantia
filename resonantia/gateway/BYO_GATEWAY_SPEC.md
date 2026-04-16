@@ -11,10 +11,12 @@ The goal is compatibility for custom gateways and OSS alternatives (for example
 - Minimum compatible (sync only):
   - `GET /api/v1/nodes`
   - `POST /api/v1/store`
+  - `POST /api/v1/ai/chat`
   - `POST /api/v1/session/rename`
   - Optional aliases for older clients:
     - `GET /api/nodes`, `GET /nodes`
     - `POST /api/store`, `POST /store`
+    - `POST /api/ai/chat`, `POST /ai/chat`
     - `POST /api/session/rename`, `POST /session/rename`
 
 - Full hosted-compatible:
@@ -185,6 +187,40 @@ Response 200 JSON:
   "movedNodes": 18,
   "movedCalibrations": 1,
   "scopesApplied": 1
+}
+```
+
+## `POST /api/v1/ai/chat`
+
+Legacy aliases:
+
+- `POST /api/ai/chat`
+- `POST /ai/chat`
+
+Request JSON:
+
+```json
+{
+  "messages": [
+    { "role": "system", "content": "..." },
+    { "role": "user", "content": "..." }
+  ],
+  "purpose": "chat"
+}
+```
+
+`purpose` values used by official clients:
+
+- `chat`
+- `transmutation`
+
+Response 200 JSON:
+
+```json
+{
+  "content": "model output text",
+  "provider": "openai",
+  "model": "gpt-4o-mini"
 }
 ```
 

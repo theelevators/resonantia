@@ -25,11 +25,21 @@ export interface LayoutOverrides {
   nodeOverrides: Record<string, LayoutPoint>;
 }
 
+export type ModelProvider = "managed-gateway" | "ollama" | "openai-byo";
+
+export interface OpenAiByoKeyStatus {
+  configured: boolean;
+  source: "os-keyring" | "local-storage" | "unsupported";
+}
+
 export interface AppConfig {
+  modelProvider: ModelProvider;
   gatewayBaseUrl: string;
   gatewayAuthToken: string;
   ollamaBaseUrl: string;
   ollamaModel: string;
+  openaiBaseUrl: string;
+  openaiModel: string;
   layoutOverrides: LayoutOverrides;
 }
 
@@ -121,6 +131,11 @@ export interface ResonantiaClient {
   chatCompose(request: ComposeChatRequest): Promise<string | null>;
   encodeCompose(request: EncodeComposeRequest): Promise<string>;
   summarizeNode(rawNode: string): Promise<AiSummary | null>;
+  getOpenAiByoKeyStatus(): Promise<OpenAiByoKeyStatus>;
+  setOpenAiByoKey(key: string): Promise<void>;
+  clearOpenAiByoKey(): Promise<void>;
+  setModelProvider(provider: ModelProvider): Promise<void>;
+  setOpenAiConfig(baseUrl?: string, model?: string): Promise<void>;
   setOllamaConfig(baseUrl?: string, model?: string): Promise<void>;
   setGatewayBaseUrl(baseUrl: string): Promise<void>;
   setGatewayAuthToken(token: string): Promise<void>;
@@ -186,6 +201,21 @@ export function createResonantiaClient(invokeCommand: CommandInvoker): Resonanti
     summarizeNode: (rawNode) =>
       invokeCommand<AiSummary | null>("summarize_node", {
         rawNode,
+      }),
+    getOpenAiByoKeyStatus: () => invokeCommand<OpenAiByoKeyStatus>("get_openai_byo_key_status"),
+    setOpenAiByoKey: (key) =>
+      invokeCommand<void>("set_openai_byo_key", {
+        key,
+      }),
+    clearOpenAiByoKey: () => invokeCommand<void>("clear_openai_byo_key"),
+    setModelProvider: (provider) =>
+      invokeCommand<void>("set_model_provider", {
+        provider,
+      }),
+    setOpenAiConfig: (baseUrl, model) =>
+      invokeCommand<void>("set_openai_config", {
+        baseUrl,
+        model,
       }),
     setOllamaConfig: (baseUrl, model) =>
       invokeCommand<void>("set_ollama_config", {

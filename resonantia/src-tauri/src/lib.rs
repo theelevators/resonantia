@@ -43,6 +43,38 @@ fn set_gateway_auth_token(
 }
 
 #[tauri::command]
+fn set_model_provider(
+    state: tauri::State<'_, core::AppState>,
+    provider: core::ModelProvider,
+) -> Result<(), String> {
+    core::set_model_provider(state.inner(), provider)
+}
+
+#[tauri::command]
+fn set_openai_config(
+    state: tauri::State<'_, core::AppState>,
+    base_url: Option<String>,
+    model: Option<String>,
+) -> Result<(), String> {
+    core::set_openai_config(state.inner(), base_url, model)
+}
+
+#[tauri::command]
+fn get_openai_byo_key_status() -> Result<core::OpenAiByoKeyStatus, String> {
+    core::get_openai_byo_key_status()
+}
+
+#[tauri::command]
+fn set_openai_byo_key(key: String) -> Result<(), String> {
+    core::set_openai_byo_key(key)
+}
+
+#[tauri::command]
+fn clear_openai_byo_key() -> Result<(), String> {
+    core::clear_openai_byo_key()
+}
+
+#[tauri::command]
 fn set_ollama_config(
     state: tauri::State<'_, core::AppState>,
     base_url: Option<String>,
@@ -173,6 +205,11 @@ pub fn run() {
             reset_layout_overrides,
             set_gateway_base_url,
             set_gateway_auth_token,
+            set_model_provider,
+            set_openai_config,
+            get_openai_byo_key_status,
+            set_openai_byo_key,
+            clear_openai_byo_key,
             set_ollama_config,
             get_health,
             list_nodes,

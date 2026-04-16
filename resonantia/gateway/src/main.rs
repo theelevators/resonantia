@@ -208,6 +208,15 @@ struct GatewayContext {
     accounts: Arc<AccountStore>,
     admin_secret: Option<String>,
     stripe: Option<Arc<StripeConfig>>,
+    ai: Option<Arc<AiConfig>>,
+}
+
+#[derive(Clone)]
+struct AiConfig {
+    openai_api_key: String,
+    openai_model: String,
+    openai_base_url: String,
+    require_soulful_for_chat: bool,
 }
 
 #[derive(Clone)]
@@ -248,6 +257,54 @@ struct UserContext {
 #[derive(Clone)]
 struct TenantRequestContext {
     state: Arc<AppState>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChatRequest {
+    messages: Vec<AiMessage>,
+    purpose: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AiMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChatResponse {
+    content: String,
+    provider: String,
+    model: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiChatRequest {
+    model: String,
+    messages: Vec<AiMessage>,
+    stream: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiChatResponse {
+    choices: Vec<OpenAiChoice>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiChoice {
+    message: OpenAiAssistantMessage,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiAssistantMessage {
+    content: String,
 }
 
 enum GatewayAuthMode {
@@ -404,6 +461,7 @@ async fn main() {
         accounts: Arc::new(accounts),
         admin_secret,
         stripe,
+        ai: read_ai_config(),
     };
 
     start_tenant_cache_cleanup(
@@ -418,6 +476,9 @@ async fn main() {
         .route("/api/v1/checkout", post(checkout_handler))
         .route("/api/v1/customer-portal", post(customer_portal_handler))
         .route("/stripe/webhook", post(stripe_webhook_handler))
+        .route("/api/v1/ai/chat", post(ai_chat_handler))
+        .route("/api/ai/chat", post(ai_chat_handler))
+        .route("/ai/chat", post(ai_chat_handler))
         .route("/api/v1/store", post(store_handler))
         .route("/api/store", post(store_handler))
         .route("/store", post(store_handler))
@@ -850,6 +911,175 @@ async fn rename_session_handler(
 
 fn has_cloud_sync_tier(tier: &str) -> bool {
     matches!(tier, "resonant" | "soulful")
+}
+
+fn has_soulful_tier(tier: &str) -> bool {
+    matches!(tier, "soulful")
+}
+
+fn read_ai_config() -> Option<Arc<AiConfig>> {
+    let openai_api_key = env::var("RESONANTIA_OPENAI_API_KEY")
+        .ok()
+        .or_else(|| env::var("OPENAI_API_KEY").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let Some(openai_api_key) = openai_api_key else {
+        info!("managed ai disabled (missing RESONANTIA_OPENAI_API_KEY/OPENAI_API_KEY)");
+        return None;
+    };
+
+    let openai_model = env::var("RESONANTIA_OPENAI_MODEL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+
+    let openai_base_url = env::var("RESONANTIA_OPENAI_BASE_URL")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+
+    let require_soulful_for_chat = env::var("RESONANTIA_AI_REQUIRE_SOULFUL_FOR_CHAT")
+        .ok()
+        .and_then(|value| value.trim().parse::<bool>().ok())
+        .unwrap_or(true);
+
+    info!(model = %openai_model, base = %openai_base_url, require_soulful_for_chat, "managed ai enabled");
+    Some(Arc::new(AiConfig {
+        openai_api_key,
+        openai_model,
+        openai_base_url,
+        require_soulful_for_chat,
+    }))
+}
+
+fn client_kind(headers: &HeaderMap) -> String {
+    headers
+        .get("x-resonantia-client")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn ai_purpose(input: Option<&str>) -> String {
+    input
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "chat".to_string())
+}
+
+async fn enforce_ai_entitlement(
+    context: &GatewayContext,
+    user_id: Option<&str>,
+    purpose: &str,
+    client: &str,
+) -> Result<(), AppError> {
+    let Some(user_id) = user_id else {
+        // BYO/auth-off mode: allow.
+        return Ok(());
+    };
+
+    let account = context
+        .accounts
+        .get(user_id)
+        .await
+        .map_err(AppError::internal)?
+        .ok_or_else(|| AppError::unauthorized("account record missing for authenticated user".to_string()))?;
+
+    let allowed = if purpose == "transmutation" {
+        has_soulful_tier(&account.tier) || client == "tauri"
+    } else if context
+        .ai
+        .as_ref()
+        .map(|ai| ai.require_soulful_for_chat)
+        .unwrap_or(true)
+    {
+        has_soulful_tier(&account.tier)
+    } else {
+        true
+    };
+
+    if allowed {
+        return Ok(());
+    }
+
+    Err(AppError::forbidden(
+        "managed ai requires soulful tier for this operation".to_string(),
+    ))
+}
+
+async fn call_openai_chat(
+    http: &reqwest::Client,
+    ai: &AiConfig,
+    messages: Vec<AiMessage>,
+) -> Result<String, AppError> {
+    let url = format!("{}/chat/completions", ai.openai_base_url.trim_end_matches('/'));
+    let payload = OpenAiChatRequest {
+        model: ai.openai_model.clone(),
+        messages,
+        stream: false,
+    };
+
+    let response = http
+        .post(&url)
+        .bearer_auth(&ai.openai_api_key)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|err| AppError::internal(format!("openai request failed: {err}")))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AppError::internal(format!("openai response failed: {status} {body}")));
+    }
+
+    let parsed = response
+        .json::<OpenAiChatResponse>()
+        .await
+        .map_err(|err| AppError::internal(format!("openai response parse failed: {err}")))?;
+
+    let content = parsed
+        .choices
+        .into_iter()
+        .next()
+        .map(|choice| choice.message.content.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::internal("openai returned empty content".to_string()))?;
+
+    Ok(content)
+}
+
+async fn ai_chat_handler(
+    State(context): State<GatewayContext>,
+    headers: HeaderMap,
+    Json(request): Json<AiChatRequest>,
+) -> Result<Json<AiChatResponse>, AppError> {
+    let ai = context
+        .ai
+        .as_ref()
+        .ok_or_else(|| AppError::bad_request("managed ai is not configured on this gateway".to_string()))?;
+
+    if request.messages.is_empty() {
+        return Err(AppError::bad_request("messages are required".to_string()));
+    }
+
+    let user_ctx = resolve_user_context(&context, &headers).await?;
+    let purpose = ai_purpose(request.purpose.as_deref());
+    let client = client_kind(&headers);
+    enforce_ai_entitlement(&context, user_ctx.user_id.as_deref(), &purpose, &client).await?;
+
+    let http = reqwest::Client::new();
+    let content = call_openai_chat(&http, ai, request.messages).await?;
+    Ok(Json(AiChatResponse {
+        content,
+        provider: "openai".to_string(),
+        model: ai.openai_model.clone(),
+    }))
 }
 
 async fn enforce_cloud_sync_entitlement(

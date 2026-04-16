@@ -21,6 +21,7 @@
     close: void;
     navigate: { sessionId: string };
     transmute: void;
+    continueInApp: { sessionId: string; prompt: string };
   }>();
 
   $: avec = data?.nodeDto?.userAvec ?? null;
@@ -33,14 +34,28 @@
   let aiBusy = false;
   let aiStatus: string | null = null;
   let lastSyntheticId: string | null = null;
+  let showMoreTargets = false;
+  let pendingLaunchUrl: string | null = null;
+  let pendingLaunchLabel: string | null = null;
+  let pendingLaunchPayloadLabel: string | null = null;
+  let pendingLaunchOpen = false;
 
   const AI_SERVICES = [
     { id: 'chatgpt', label: 'ChatGPT', baseUrl: 'https://chatgpt.com/' },
     { id: 'claude', label: 'Claude', baseUrl: 'https://claude.ai/new' },
-    { id: 'perplexity', label: 'Perplexity', baseUrl: 'https://www.perplexity.ai/search/new' },
+    { id: 'cursor', label: 'Cursor', baseUrl: 'https://cursor.com/link/prompt' },
+    { id: 'zed', label: 'Zed', baseUrl: 'zed://agent' },
+    { id: 't3', label: 'T3 Chat', baseUrl: 'https://t3.chat/new' },
+    { id: 'perplexity', label: 'Perplexity', baseUrl: 'https://www.perplexity.ai/' },
+    { id: 'v0', label: 'v0', baseUrl: 'https://v0.app/chat' },
   ] as const;
+  const MAX_DEEPLINK_PROMPT_CHARS = 1800;
+  const MAX_DEEPLINK_URL_CHARS = 1900;
 
   type AiServiceId = typeof AI_SERVICES[number]['id'];
+  const PRIMARY_AI_SERVICE_IDS: AiServiceId[] = ['chatgpt', 'claude'];
+  $: primaryServices = AI_SERVICES.filter((service) => PRIMARY_AI_SERVICE_IDS.includes(service.id));
+  $: secondaryServices = AI_SERVICES.filter((service) => !PRIMARY_AI_SERVICE_IDS.includes(service.id));
 
   $: if (summary) summaryOpen = true;
   $: {
@@ -49,6 +64,11 @@
       lastSyntheticId = nextSyntheticId;
       aiMenu = null;
       aiStatus = null;
+      showMoreTargets = false;
+      pendingLaunchUrl = null;
+      pendingLaunchLabel = null;
+      pendingLaunchPayloadLabel = null;
+      pendingLaunchOpen = false;
     }
   }
   $: shellStyle = [
@@ -87,6 +107,25 @@
   function toggleAiMenu(nextMenu: 'context' | 'compression') {
     aiMenu = aiMenu === nextMenu ? null : nextMenu;
     aiStatus = null;
+    showMoreTargets = false;
+  }
+
+  function buildContextDeepLinkPrompt() {
+    if (!data?.nodeDto) return '';
+
+    return data.nodeDto.raw;
+  }
+
+  function buildCompressionDeepLinkPrompt() {
+    if (!data?.nodeDto) return '';
+
+    return [
+      'Distill this memory into 3 sections: Snapshot, Continuation, Risks.',
+      `Session: ${data.nodeDto.sessionId}`,
+      `Tier: ${data.nodeDto.tier}`,
+      `Timestamp: ${data.nodeDto.timestamp}`,
+      'Use clipboard context for full details.',
+    ].join('\n');
   }
 
   async function copyText(text: string) {
@@ -111,34 +150,56 @@
     throw new Error('Clipboard is not available in this context.');
   }
 
+  function compactNodePreview(rawNode: string) {
+    const normalized = rawNode.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      return '';
+    }
+
+    return normalized.length > 420 ? `${normalized.slice(0, 420)}...` : normalized;
+  }
+
   function buildContextPrimePrompt() {
     if (!data?.node || !data.nodeDto) return '';
 
+    const related = data.relatedSessions
+      .slice(0, 4)
+      .map((session) => session.label)
+      .join(', ');
+    const summaryLines = summary
+      ? [
+          summary.topic ? `- topic: ${summary.topic}` : null,
+          summary.whatHappened ? `- what happened: ${summary.whatHappened}` : null,
+          summary.whereWeLeftOff ? `- where we left off: ${summary.whereWeLeftOff}` : null,
+          summary.pickBackUpWith ? `- pick back up with: ${summary.pickBackUpWith}` : null,
+        ].filter((line): line is string => Boolean(line))
+      : [];
+    const fallbackSummary = summaryLines.length > 0 ? summaryLines.join('\n') : '- summary unavailable';
+    const nodePreview = compactNodePreview(data.nodeDto.raw);
+
     return [
-      '⏣ Spatio-Temporal Transfer Protocol (STTP): an experimental typed IR for persistent stateful communication between language models and humans — a problem the field has not yet solved.',
-      'Envelope carries session metadata. Content carries confidence-weighted compressed payload. Metrics carry validation signals.',
-      'Attractor vectors follow V_a = (1-μ)×baseline + μ×target. Ψ = Σ(V_a) is the coherence checksum.',
-      'Attractor values are descriptive measurements. model_avec defines the confidence baseline for this interaction.',
+      'You are receiving a context handoff from Resonantia.',
+      'Treat this as active memory transfer and continue naturally.',
       '',
-      'A protocol called STTP is being used in this conversation to preserve continuity across time.',
-      'Its purpose is simple: keep the thread alive without losing the important parts of the conversation when context shifts, sessions change, or the exchange needs to be resumed later.',
+      'Goals:',
+      '1. continue from this memory without asking to restate everything,',
+      '2. keep tone and trajectory aligned,',
+      '3. propose the best immediate next step.',
       '',
-      'Please treat the node below as live conversational memory.',
-      'Use it to understand what is happening now, what matters most, and where the conversation should continue next.',
-      'You do not need to explain the protocol unless the user asks. Just let it quietly improve continuity, memory, and relevance.',
+      'Handoff packet:',
+      `- session: ${data.nodeDto.sessionId}`,
+      `- tier: ${data.nodeDto.tier}`,
+      `- timestamp: ${data.nodeDto.timestamp}`,
+      `- psi: ${data.nodeDto.psi.toFixed(4)}`,
+      related ? `- nearby threads: ${related}` : '- nearby threads: none',
       '',
-      'After reading it, respond by:',
-      '1. naming the core thread in plain language,',
-      '2. identifying the most important continuation point,',
-      '3. proposing the next best move without losing the node\'s tone.',
-      '4. keeping the relationship between this node and the current conversation intact over time.',
+      'Recent transmutation:',
+      fallbackSummary,
       '',
-      `Session: ${data.nodeDto.sessionId}`,
-      `Tier: ${data.nodeDto.tier}`,
-      `Timestamp: ${data.nodeDto.timestamp}`,
-      `Psi: ${data.nodeDto.psi.toFixed(4)}`,
+      'Node preview:',
+      nodePreview || '(empty)',
       '',
-      'Source node:',
+      'Source node (verbatim):',
       data.nodeDto.raw,
     ].join('\n');
   }
@@ -146,91 +207,153 @@
   function buildCompressionPrimePrompt() {
     if (!data?.node || !data.nodeDto) return '';
 
+    const summaryLines = summary
+      ? [
+          summary.topic ? `- topic: ${summary.topic}` : null,
+          summary.whatHappened ? `- what happened: ${summary.whatHappened}` : null,
+          summary.whereWeLeftOff ? `- where we left off: ${summary.whereWeLeftOff}` : null,
+          summary.pickBackUpWith ? `- pick back up with: ${summary.pickBackUpWith}` : null,
+        ].filter((line): line is string => Boolean(line))
+      : [];
+
     return [
-      '⏣ Spatio-Temporal Transfer Protocol (STTP): an experimental typed IR for persistent stateful communication between language models and humans — a problem the field has not yet solved.',
-      'Envelope carries session metadata. Content carries confidence-weighted compressed payload. Metrics carry validation signals.',
-      'Attractor vectors follow V_a = (1-μ)×baseline + μ×target. Ψ = Σ(V_a) is the coherence checksum.',
-      'Attractor values are descriptive measurements. model_avec defines the confidence baseline for this interaction.',
+      'Distill this memory into a compact continuity handoff.',
+      'Return output in 3 sections only: Snapshot, Continuation, Risks.',
+      'Keep it concise and practical.',
       '',
-      'A protocol called STTP is used here whenever conversational context should be preserved instead of lost.',
-      'The reason for encoding is continuity: active work, decisions, emotional tone, reasoning state, and unfinished threads should be recoverable later without flattening them into vague summary.',
-      'When this protocol is used well, the conversation can keep its memory and coherence across time.',
+      'Requirements:',
+      '- Preserve technical specifics and intent.',
+      '- Keep unresolved questions explicit.',
+      '- Include the single best next action.',
       '',
-      'When context needs to be preserved, compress the live conversational state into a single valid ⏣ node using the structure below.',
-      'Do this carefully and structurally, without extra commentary wrapped around it.',
+      `Session: ${data.nodeDto.sessionId}`,
+      `Tier: ${data.nodeDto.tier}`,
+      `Timestamp: ${data.nodeDto.timestamp}`,
+      `Psi: ${data.nodeDto.psi.toFixed(4)}`,
       '',
-      '⏣      node marker        — scopes every block',
-      '⊕⟨⟩   provenance         — origin, lineage, response contract',
-      '⦿⟨⟩   envelope           — timestamp, tier, session_id, dual AVEC',
-      '◈⟨⟩   content            — compressed meaning, confidence-weighted',
-      '⍉⟨⟩   metrics            — rho, kappa, psi, compression_avec',
-      '⟩      stop               — closes every layer, no exceptions',
+      'Existing transmutation notes:',
+      summaryLines.length > 0 ? summaryLines.join('\n') : '- none',
       '',
-      'Reading order is structural law: ⊕ → ⦿ → ◈ → ⍉',
-      'Orient → Identify → Understand → Verify',
-      '',
-      'Every content field follows exactly one pattern:',
-      '  field_name(.confidence): value',
-      'Nesting maximum 5 levels. No natural language. No meta-commentary.',
-      'One valid ⏣ node. Nothing else resolves this state.',
-      '',
-      'Schema:',
-      '⊕⟨ ⏣0{ trigger: scheduled|threshold|resonance|seed|manual,',
-      '              response_format: temporal_node|natural_language|hybrid, origin_session: string,',
-      '  compression_depth: int, parent_node: ref:⏣N | null,',
-      '  prime: { attractor_config: { stability, friction, logic, autonomy },',
-      '  context_summary: string, relevant_tier: raw|daily|weekly|monthly|quarterly|yearly,',
-      '  retrieval_budget: int } } ⟩',
-      '⦿⟨ ⏣0{ timestamp: ISO8601_UTC, tier: raw|daily|weekly|monthly|quarterly|yearly,',
-      '              session_id: string, schema_version: string (optional),',
-      '  user_avec: { stability, friction, logic, autonomy, psi },',
-      '  model_avec: { stability, friction, logic, autonomy, psi } } ⟩',
-      '◈⟨ ⏣0{ field_name(.confidence): value } ⟩',
-      '⍉⟨ ⏣0{ rho: float, kappa: float, psi: float,',
-      '  compression_avec: { stability, friction, logic, autonomy, psi } } ⟩',
-      '',
-      'The goal is not compression for its own sake. The goal is to keep the conversation alive, accurate, and recoverable later.',
-      'Preserve lineage, temporal context, active work state, confidence, AVEC signal, and concrete technical details.',
-      '',
-      '',
-      `Reference session: ${data.nodeDto.sessionId}`,
-      `Reference tier: ${data.nodeDto.tier}`,
-      `Reference timestamp: ${data.nodeDto.timestamp}`,
-      '',
-      'Reference node:',
+      'Source node:',
       data.nodeDto.raw,
     ].join('\n');
   }
 
-  function buildDeepLink(serviceId: AiServiceId, prompt: string) {
-    const encoded = encodeURIComponent(prompt);
-    const service = AI_SERVICES.find((entry) => entry.id === serviceId);
-    const deepUrl = serviceId === 'chatgpt'
-      ? `https://chatgpt.com/?q=${encoded}`
+  function toUrlSafePrompt(prompt: string) {
+    return prompt
+      .normalize('NFC')
+      .replace(/\r\n?/g, '\n')
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ')
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function buildServiceDeepLink(serviceId: AiServiceId, encodedPrompt: string) {
+    return serviceId === 'chatgpt'
+      ? `https://chatgpt.com/?q=${encodedPrompt}&hints=search`
       : serviceId === 'claude'
-        ? `https://claude.ai/new?q=${encoded}`
-        : `https://www.perplexity.ai/search/new?q=${encoded}`;
+        ? `https://claude.ai/new?q=${encodedPrompt}`
+        : serviceId === 'cursor'
+          ? `https://cursor.com/link/prompt?text=${encodedPrompt}`
+          : serviceId === 'zed'
+            ? `zed://agent?prompt=${encodedPrompt}`
+            : serviceId === 't3'
+              ? `https://t3.chat/new?q=${encodedPrompt}`
+              : serviceId === 'v0'
+                ? `https://v0.app/chat?q=${encodedPrompt}`
+                : `https://www.perplexity.ai/?q=${encodedPrompt}`;
+  }
+
+  function buildDeepLink(serviceId: AiServiceId, prompt: string) {
+    const safePrompt = toUrlSafePrompt(prompt);
+    const service = AI_SERVICES.find((entry) => entry.id === serviceId);
+    const deepUrl = buildServiceDeepLink(serviceId, encodeURIComponent(safePrompt));
+    const limitExceeded = safePrompt.length > MAX_DEEPLINK_PROMPT_CHARS || deepUrl.length > MAX_DEEPLINK_URL_CHARS;
 
     return {
       service,
-      url: deepUrl.length <= 1800 ? deepUrl : service?.baseUrl ?? deepUrl,
-      usedFallback: deepUrl.length > 1800,
+      url: limitExceeded ? service?.baseUrl ?? deepUrl : deepUrl,
+      usedFallback: limitExceeded,
+      skippedAutoPrompt: limitExceeded,
     };
   }
 
-  async function openPrime(serviceId: AiServiceId, mode: 'context' | 'compression') {
-    const prompt = mode === 'context' ? buildContextPrimePrompt() : buildCompressionPrimePrompt();
-    if (!prompt) return;
+  async function continueInResonantia() {
+    const prompt = buildContextPrimePrompt();
+    const sessionId = data?.nodeDto?.sessionId?.trim();
+    if (!prompt || !sessionId) return;
 
-    const { service, url, usedFallback } = buildDeepLink(serviceId, prompt);
     aiBusy = true;
     aiStatus = null;
 
     try {
       await copyText(prompt);
+      dispatch('continueInApp', { sessionId, prompt });
+      aiStatus = 'thread context copied · continued in resonantia';
+      aiMenu = null;
+    } catch (err) {
+      aiStatus = String(err);
+    } finally {
+      aiBusy = false;
+    }
+  }
+
+  async function dismissLaunchNoticeAndOpen() {
+    if (!pendingLaunchUrl) {
+      pendingLaunchOpen = false;
+      return;
+    }
+
+    const url = pendingLaunchUrl;
+    const label = pendingLaunchLabel ?? 'model';
+    const payloadLabel = pendingLaunchPayloadLabel ?? 'text';
+
+    pendingLaunchOpen = false;
+    pendingLaunchUrl = null;
+    pendingLaunchLabel = null;
+    pendingLaunchPayloadLabel = null;
+
+    aiBusy = true;
+    aiStatus = null;
+    try {
+      await openExternalUrl(url);
+      aiStatus = `copied ${payloadLabel} · opening ${label}`;
+    } catch (err) {
+      aiStatus = String(err);
+    } finally {
+      aiBusy = false;
+    }
+  }
+
+  async function openPrime(serviceId: AiServiceId, mode: 'context' | 'compression') {
+    const prompt = mode === 'context' ? buildContextPrimePrompt() : buildCompressionPrimePrompt();
+    const deepLinkPrompt = mode === 'context' ? buildContextDeepLinkPrompt() : buildCompressionDeepLinkPrompt();
+    if (!prompt) return;
+
+    const { service, url, usedFallback, skippedAutoPrompt } = buildDeepLink(serviceId, deepLinkPrompt || prompt);
+    aiBusy = true;
+    aiStatus = null;
+    pendingLaunchOpen = false;
+    pendingLaunchUrl = null;
+    pendingLaunchLabel = null;
+    pendingLaunchPayloadLabel = null;
+
+    try {
+      await copyText(prompt);
+      if (skippedAutoPrompt) {
+        pendingLaunchUrl = url;
+        pendingLaunchLabel = service?.label ?? 'model';
+        pendingLaunchPayloadLabel = mode === 'context' ? 'thread text' : 'distillation text';
+        pendingLaunchOpen = true;
+        aiStatus = `${mode === 'context' ? 'node' : 'prompt'} too large for auto launch · copied to clipboard`;
+        aiMenu = null;
+        return;
+      }
+
       await openExternalUrl(url);
       aiStatus = usedFallback
-        ? `copied ${mode === 'context' ? 'thread text' : 'distillation text'} · opening ${service?.label ?? 'model'}`
+          ? `copied ${mode === 'context' ? 'thread text' : 'distillation text'} · opening ${service?.label ?? 'model'}`
         : `copied ${mode === 'context' ? 'thread text' : 'distillation text'} · sent to ${service?.label ?? 'model'}`;
       aiMenu = null;
     } catch (err) {
@@ -291,18 +414,57 @@
       <div class="prime-card" role="region" aria-label={aiMenu === 'context' ? 'Carry thread options' : 'Memory distillation options'}>
         <div class="prime-header">
           <span class="prime-title">{aiMenu === 'context' ? 'carry this thread' : 'distill this memory'}</span>
-          <button class="prime-close-btn" on:click={() => (aiMenu = null)} aria-label="Close prime actions">✕</button>
+          <button class="prime-close-btn" on:click={() => { aiMenu = null; showMoreTargets = false; }} aria-label="Close prime actions">✕</button>
         </div>
 
-        <p class="prime-note">{aiMenu === 'context' ? 'Copies the thread text first, then opens the model.' : 'Copies the distillation text first, then opens the model.'}</p>
+        <p class="prime-note">{aiMenu === 'context' ? 'Copies enriched thread context first, then opens your target.' : 'Copies memory distillation context first, then opens your target.'}</p>
+
+        {#if aiMenu === 'context'}
+          <div class="prime-services prime-services-app">
+            <button class="prime-service-btn prime-service-btn-app" on:click={continueInResonantia} disabled={aiBusy}>
+              continue in resonantia
+            </button>
+          </div>
+        {/if}
 
         <div class="prime-services">
-          {#each AI_SERVICES as service}
+          {#each primaryServices as service}
             <button class="prime-service-btn" on:click={() => openPrime(service.id, aiMenu === 'compression' ? 'compression' : 'context')} disabled={aiBusy}>
               {service.label}
             </button>
           {/each}
+
+          {#if secondaryServices.length > 0}
+            <button class="prime-service-btn prime-service-btn-more" on:click={() => (showMoreTargets = !showMoreTargets)} disabled={aiBusy}>
+              {showMoreTargets ? 'less' : 'more'}
+            </button>
+          {/if}
         </div>
+
+        {#if showMoreTargets}
+          <div class="prime-services prime-services-more">
+            {#each secondaryServices as service}
+              <button class="prime-service-btn" on:click={() => openPrime(service.id, aiMenu === 'compression' ? 'compression' : 'context')} disabled={aiBusy}>
+                {service.label}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if pendingLaunchOpen}
+      <div class="launch-notice" role="dialog" aria-label="Launch confirmation">
+        <div class="launch-notice-header">
+          <span class="launch-notice-title">auto launch paused</span>
+          <button class="launch-notice-close" on:click={dismissLaunchNoticeAndOpen} aria-label="Dismiss and open link">✕</button>
+        </div>
+        <p class="launch-notice-copy">
+          this node is too large to inject in a launch url. we copied it to your clipboard.
+        </p>
+        <button class="launch-notice-btn" on:click={dismissLaunchNoticeAndOpen} disabled={aiBusy}>
+          dismiss + open {pendingLaunchLabel ?? 'model'}
+        </button>
       </div>
     {/if}
 
@@ -580,6 +742,65 @@
     color: rgba(169, 214, 238, 0.76);
   }
 
+  .launch-notice {
+    margin-top: 10px;
+    width: min(320px, calc(100vw - 56px));
+    padding: 10px;
+    border-radius: 10px;
+    border: 0.5px solid rgba(201, 189, 142, 0.34);
+    background: rgba(28, 23, 15, 0.92);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
+  }
+
+  .launch-notice-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+
+  .launch-notice-title {
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(235, 223, 178, 0.78);
+  }
+
+  .launch-notice-close {
+    background: transparent;
+    border: none;
+    color: rgba(235, 223, 178, 0.56);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .launch-notice-copy {
+    margin: 0 0 8px;
+    font-size: 10px;
+    line-height: 1.45;
+    color: rgba(235, 223, 178, 0.72);
+  }
+
+  .launch-notice-btn {
+    font-family: 'Departure Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 7px 10px;
+    border-radius: 999px;
+    border: 0.5px solid rgba(224, 205, 140, 0.35);
+    background: rgba(196, 166, 104, 0.14);
+    color: rgba(244, 232, 194, 0.9);
+    cursor: pointer;
+  }
+
+  .launch-notice-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
   .prime-card {
     position: absolute;
     left: 0;
@@ -648,6 +869,16 @@
     flex-wrap: wrap;
   }
 
+  .prime-services-app {
+    margin-bottom: 8px;
+  }
+
+  .prime-services-more {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 0.5px solid rgba(177, 215, 235, 0.16);
+  }
+
   .prime-service-btn {
     font-family: 'Departure Mono', monospace;
     font-size: 9px;
@@ -670,6 +901,18 @@
   .prime-service-btn:disabled {
     opacity: 0.45;
     cursor: not-allowed;
+  }
+
+  .prime-service-btn-app {
+    border-color: rgba(198, 217, 173, 0.26);
+    background: rgba(153, 189, 110, 0.11);
+    color: rgba(224, 241, 202, 0.86);
+  }
+
+  .prime-service-btn-more {
+    border-color: rgba(177, 215, 235, 0.26);
+    background: rgba(177, 215, 235, 0.1);
+    color: rgba(235, 245, 251, 0.86);
   }
 
   .alchemy-card {

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import type { ModelProvider } from '@resonantia/core';
 
   export let open = false;
   export let loading = false;
@@ -7,10 +8,18 @@
   export let error: string | null = null;
   export let saved = false;
   export let localModelOriginWarning: string | null = null;
+  export let modelProvider: ModelProvider = 'managed-gateway';
   export let ollamaBaseUrl = '';
   export let ollamaModel = '';
+  export let openaiBaseUrl = '';
+  export let openaiModel = '';
   export let gatewayBaseUrl = '';
   export let gatewayAuthToken = '';
+  export let openaiByoKeyInput = '';
+  export let openaiByoKeyConfigured = false;
+  export let openaiByoKeySource = 'os-keyring';
+  export let openaiByoKeyBusy = false;
+  export let openaiByoKeyError: string | null = null;
   export let cloudAuthAvailable = false;
   export let cloudAuthSignedIn = false;
   export let cloudAuthBusy = false;
@@ -36,6 +45,8 @@
     connectCloud: void;
     refreshCloudToken: void;
     clearCloudToken: void;
+    saveOpenAiKey: void;
+    clearOpenAiKey: void;
   }>();
 </script>
 
@@ -120,6 +131,66 @@
         <span class="settings-subsection-label">ai model</span>
 
         <label class="settings-field">
+          <span class="settings-label">provider</span>
+          <select class="drawer-input" bind:value={modelProvider} disabled={loading || saving || openaiByoKeyBusy}>
+            <option value="managed-gateway">managed gateway (recommended)</option>
+            <option value="ollama">local ollama</option>
+            <option value="openai-byo">openai BYO key (desktop)</option>
+          </select>
+        </label>
+
+        {#if modelProvider === 'openai-byo'}
+          <label class="settings-field">
+            <span class="settings-label">openai base url</span>
+            <input class="drawer-input" type="text" placeholder="https://api.openai.com" bind:value={openaiBaseUrl} disabled={loading || saving || openaiByoKeyBusy} />
+          </label>
+
+          <label class="settings-field">
+            <span class="settings-label">openai model</span>
+            <input class="drawer-input" type="text" placeholder="gpt-4o-mini" bind:value={openaiModel} disabled={loading || saving || openaiByoKeyBusy} />
+          </label>
+
+          <label class="settings-field">
+            <span class="settings-label">api key</span>
+            <span class="settings-note">Stored in your OS keychain ({openaiByoKeySource}). The key is never synced with your session data.</span>
+            <input
+              class="drawer-input"
+              type="password"
+              placeholder={openaiByoKeyConfigured ? 'replace key (optional)' : 'sk-...'}
+              bind:value={openaiByoKeyInput}
+              disabled={loading || saving || openaiByoKeyBusy}
+              autocomplete="off"
+            />
+          </label>
+
+          <div class="cloud-auth-actions">
+            <button
+              class="drawer-btn"
+              type="button"
+              on:click={() => dispatch('saveOpenAiKey')}
+              disabled={loading || saving || openaiByoKeyBusy || !openaiByoKeyInput.trim()}
+            >
+              {openaiByoKeyBusy ? 'saving key…' : openaiByoKeyConfigured ? 'replace key' : 'save key'}
+            </button>
+            <button
+              class="drawer-btn cancel"
+              type="button"
+              on:click={() => dispatch('clearOpenAiKey')}
+              disabled={loading || saving || openaiByoKeyBusy || !openaiByoKeyConfigured}
+            >
+              clear key
+            </button>
+          </div>
+
+          <p class="settings-note">key status: {openaiByoKeyConfigured ? 'configured' : 'not set'}</p>
+          {#if openaiByoKeyError}
+            <p class="drawer-error settings-inline-warning">{openaiByoKeyError}</p>
+          {/if}
+        {/if}
+
+        {#if modelProvider !== 'openai-byo'}
+
+        <label class="settings-field">
           <span class="settings-label">server address</span>
           <span class="settings-note">Only change this if your AI model runs somewhere other than the default local setup.</span>
           <input class="drawer-input" type="text" placeholder="http://127.0.0.1:11434" bind:value={ollamaBaseUrl} disabled={loading || saving} />
@@ -170,6 +241,7 @@
               autocomplete="off"
             />
           </label>
+        {/if}
         {/if}
       </div>
     {/if}

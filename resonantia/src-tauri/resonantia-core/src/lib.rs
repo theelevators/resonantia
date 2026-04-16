@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use hex::encode as hex_encode;
+use keyring::{Entry as KeyringEntry, Error as KeyringError};
 use regex::Regex;
 use reqwest::Client;
 use reqwest::Url;
@@ -28,6 +29,10 @@ const DEFAULT_GATEWAY_BASE_URL: &str = match option_env!("GATEWAY_BASE_URL") {
 const DEFAULT_GATEWAY_AUTH_TOKEN: &str = "";
 const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
 const DEFAULT_OLLAMA_MODEL: &str = "gemma3";
+const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com";
+const DEFAULT_OPENAI_MODEL: &str = "gpt-4o-mini";
+const OPENAI_KEYRING_SERVICE: &str = "resonantia";
+const OPENAI_KEYRING_USER: &str = "openai-byo-key";
 const TRANSMUTE_PREAMBLE: &str = include_str!("../../../preamble.md");
 const COMPOSE_CHAT_PREAMBLE: &str = "This is a chat conversation with Resonantia. Silently track two AVEC states throughout the chat: one for the user and one for yourself. Each AVEC state includes stability, friction, logic, autonomy, and psi. Do not mention AVEC tracking, scores, or internal analysis to the user unless they explicitly ask. Use this internal tracking so later conversation encoding accurately represents what happened.";
 const COMPOSE_ENCODE_PREAMBLE: &str = r#"⏣ Spatio-Temporal Transfer Protocol (STTP): an experimental typed IR for persistent stateful communication between language models and humans — a problem the field has not yet solved.
@@ -373,10 +378,13 @@ impl SurrealDbClient for SurrealSdkClient {
 
 pub struct AppState {
     http: Client,
+    model_provider: RwLock<ModelProvider>,
     gateway_base_url: RwLock<String>,
     gateway_auth_token: RwLock<String>,
     ollama_base_url: RwLock<String>,
     ollama_model: RwLock<String>,
+    openai_base_url: RwLock<String>,
+    openai_model: RwLock<String>,
     layout_overrides: RwLock<LayoutOverrides>,
     config_path: RwLock<Option<PathBuf>>,
     sttp_runtime: RwLock<Arc<SttpRuntime>>,
@@ -389,16 +397,45 @@ impl Default for AppState {
 
         Self {
             http: Client::new(),
+            model_provider: RwLock::new(ModelProvider::ManagedGateway),
             gateway_base_url: RwLock::new(DEFAULT_GATEWAY_BASE_URL.to_string()),
             gateway_auth_token: RwLock::new(DEFAULT_GATEWAY_AUTH_TOKEN.to_string()),
             ollama_base_url: RwLock::new(DEFAULT_OLLAMA_BASE_URL.to_string()),
             ollama_model: RwLock::new(DEFAULT_OLLAMA_MODEL.to_string()),
+            openai_base_url: RwLock::new(DEFAULT_OPENAI_BASE_URL.to_string()),
+            openai_model: RwLock::new(DEFAULT_OPENAI_MODEL.to_string()),
             layout_overrides: RwLock::new(LayoutOverrides::default()),
             config_path: RwLock::new(None),
             sttp_runtime: RwLock::new(sttp_runtime),
             sttp_runtime_label: RwLock::new(sttp_runtime_label),
         }
     }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelProvider {
+    ManagedGateway,
+    Ollama,
+    OpenaiByo,
+}
+
+impl Default for ModelProvider {
+    fn default() -> Self {
+        Self::ManagedGateway
+    }
+}
+
+fn default_model_provider() -> ModelProvider {
+    ModelProvider::ManagedGateway
+}
+
+fn default_openai_base_url() -> String {
+    DEFAULT_OPENAI_BASE_URL.to_string()
+}
+
+fn default_openai_model() -> String {
+    DEFAULT_OPENAI_MODEL.to_string()
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -420,13 +457,26 @@ pub struct LayoutOverrides {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    #[serde(default = "default_model_provider")]
+    model_provider: ModelProvider,
     gateway_base_url: String,
     #[serde(default)]
     gateway_auth_token: String,
     ollama_base_url: String,
     ollama_model: String,
+    #[serde(default = "default_openai_base_url")]
+    openai_base_url: String,
+    #[serde(default = "default_openai_model")]
+    openai_model: String,
     #[serde(default)]
     layout_overrides: LayoutOverrides,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAiByoKeyStatus {
+    configured: bool,
+    source: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -794,7 +844,27 @@ struct OllamaChatRequest {
     stream: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GatewayAiChatRequest {
+    messages: Vec<OllamaMessage>,
+    purpose: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GatewayAiChatResponse {
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiChatRequest {
+    model: String,
+    messages: Vec<OllamaMessage>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct OllamaMessage {
     role: String,
@@ -805,6 +875,47 @@ struct OllamaMessage {
 #[serde(rename_all = "camelCase")]
 struct OllamaChatResponse {
     message: Option<OllamaMessage>,
+}
+
+fn openai_byo_keyring_entry() -> Result<KeyringEntry, String> {
+    KeyringEntry::new(OPENAI_KEYRING_SERVICE, OPENAI_KEYRING_USER)
+        .map_err(|err| map_err("failed to initialize OS keyring", err))
+}
+
+fn read_openai_byo_key() -> Result<Option<String>, String> {
+    let entry = openai_byo_keyring_entry()?;
+    match entry.get_password() {
+        Ok(value) => {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed))
+            }
+        }
+        Err(KeyringError::NoEntry) => Ok(None),
+        Err(err) => Err(map_err("failed to read openai BYO key from OS keyring", err)),
+    }
+}
+
+fn set_openai_byo_key_os(key: &str) -> Result<(), String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err("openai BYO key cannot be empty".to_string());
+    }
+
+    let entry = openai_byo_keyring_entry()?;
+    entry
+        .set_password(trimmed)
+        .map_err(|err| map_err("failed to store openai BYO key in OS keyring", err))
+}
+
+fn clear_openai_byo_key_os() -> Result<(), String> {
+    let entry = openai_byo_keyring_entry()?;
+    match entry.delete_credential() {
+        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+        Err(err) => Err(map_err("failed to clear openai BYO key from OS keyring", err)),
+    }
 }
 
 fn join_url(base_url: &str, path: &str) -> Result<String, String> {
@@ -1826,6 +1937,11 @@ fn node_fingerprint(session_id: &str, timestamp: &str, tier: &str, parent_node_i
 }
 
 fn read_current_config(state: &AppState) -> Result<AppConfig, String> {
+    let model_provider = *state
+        .model_provider
+        .read()
+        .map_err(|err| map_err("failed to read model provider", err))?;
+
     let gateway_base_url = state
         .gateway_base_url
         .read()
@@ -1844,6 +1960,18 @@ fn read_current_config(state: &AppState) -> Result<AppConfig, String> {
         .map_err(|err| map_err("failed to read ollama model", err))?
         .clone();
 
+    let openai_base_url = state
+        .openai_base_url
+        .read()
+        .map_err(|err| map_err("failed to read openai base url", err))?
+        .clone();
+
+    let openai_model = state
+        .openai_model
+        .read()
+        .map_err(|err| map_err("failed to read openai model", err))?
+        .clone();
+
     let layout_overrides = state
         .layout_overrides
         .read()
@@ -1857,10 +1985,13 @@ fn read_current_config(state: &AppState) -> Result<AppConfig, String> {
         .clone();
 
     Ok(AppConfig {
+        model_provider,
         gateway_base_url,
         gateway_auth_token,
         ollama_base_url,
         ollama_model,
+        openai_base_url,
+        openai_model,
         layout_overrides,
     })
 }
@@ -1908,6 +2039,14 @@ fn load_persisted_config(state: &AppState) -> Result<(), String> {
 
     {
         let mut guard = state
+            .model_provider
+            .write()
+            .map_err(|err| map_err("failed to restore model provider", err))?;
+        *guard = config.model_provider;
+    }
+
+    {
+        let mut guard = state
             .gateway_base_url
             .write()
             .map_err(|err| map_err("failed to restore gateway url", err))?;
@@ -1936,6 +2075,22 @@ fn load_persisted_config(state: &AppState) -> Result<(), String> {
             .write()
             .map_err(|err| map_err("failed to restore ollama model", err))?;
         *guard = config.ollama_model;
+    }
+
+    {
+        let mut guard = state
+            .openai_base_url
+            .write()
+            .map_err(|err| map_err("failed to restore openai base url", err))?;
+        *guard = config.openai_base_url;
+    }
+
+    {
+        let mut guard = state
+            .openai_model
+            .write()
+            .map_err(|err| map_err("failed to restore openai model", err))?;
+        *guard = config.openai_model;
     }
 
     {
@@ -2156,7 +2311,115 @@ fn build_encode_prompt(
     parts.join("\n")
 }
 
-async fn run_ollama_chat(state: &AppState, messages: Vec<OllamaMessage>) -> Result<Option<String>, String> {
+async fn run_model_chat(
+    state: &AppState,
+    messages: Vec<OllamaMessage>,
+    purpose: &str,
+) -> Result<Option<String>, String> {
+    let model_provider = *state
+        .model_provider
+        .read()
+        .map_err(|err| map_err("failed to read model provider", err))?;
+
+    if model_provider == ModelProvider::OpenaiByo {
+        return run_openai_byo_chat(state, messages).await;
+    }
+
+    if model_provider == ModelProvider::Ollama {
+        return run_ollama_chat(state, messages).await;
+    }
+
+    run_gateway_then_ollama_chat(state, messages, purpose).await
+}
+
+async fn run_gateway_then_ollama_chat(
+    state: &AppState,
+    messages: Vec<OllamaMessage>,
+    purpose: &str,
+) -> Result<Option<String>, String> {
+    let gateway_base_url = state
+        .gateway_base_url
+        .read()
+        .map_err(|err| map_err("failed to read gateway url", err))?
+        .clone();
+    let gateway_auth_token = state
+        .gateway_auth_token
+        .read()
+        .map_err(|err| map_err("failed to read gateway auth token", err))?
+        .clone();
+
+    let gateway_base = gateway_base_url.trim().trim_end_matches('/').to_string();
+    if !gateway_base.is_empty() {
+        let paths = ["/api/v1/ai/chat", "/api/ai/chat", "/ai/chat"];
+        let payload = GatewayAiChatRequest {
+            messages: messages.clone(),
+            purpose: purpose.to_string(),
+        };
+
+        let mut last_gateway_error: Option<String> = None;
+        for path in paths {
+            let url = match join_url(&gateway_base, path) {
+                Ok(value) => value,
+                Err(err) => {
+                    last_gateway_error = Some(err);
+                    continue;
+                }
+            };
+
+            let mut request = state
+                .http
+                .post(&url)
+                .header("x-resonantia-client", "tauri")
+                .json(&payload);
+
+            let token = gateway_auth_token.trim();
+            if !token.is_empty() {
+                request = request.bearer_auth(token);
+            }
+
+            match request.send().await {
+                Ok(response) => {
+                    let status = response.status();
+                    if status == reqwest::StatusCode::NOT_FOUND {
+                        last_gateway_error = Some(format!("gateway ai endpoint missing at {url}"));
+                        continue;
+                    }
+
+                    if status.is_success() {
+                        let parsed = response
+                            .json::<GatewayAiChatResponse>()
+                            .await
+                            .map_err(|err| map_err("gateway ai response parse failed", err))?;
+                        let text = parsed.content.trim().to_string();
+                        if !text.is_empty() {
+                            return Ok(Some(text));
+                        }
+                        last_gateway_error = Some("gateway ai returned empty content".to_string());
+                        continue;
+                    }
+
+                    let body = response.text().await.unwrap_or_default();
+                    last_gateway_error = Some(format!("gateway ai response failed: {status} {body}"));
+                }
+                Err(err) => {
+                    last_gateway_error = Some(map_err("gateway ai request failed", err));
+                }
+            }
+        }
+
+        if let Some(error) = last_gateway_error {
+            eprintln!("gateway ai unavailable, falling back to ollama: {error}");
+        }
+    }
+
+    run_ollama_chat(state, messages).await
+}
+
+async fn run_ollama_chat(
+    state: &AppState,
+    messages: Vec<OllamaMessage>,
+) -> Result<Option<String>, String> {
+
     let ollama_base_url = state
         .ollama_base_url
         .read()
@@ -2199,6 +2462,62 @@ async fn run_ollama_chat(state: &AppState, messages: Vec<OllamaMessage>) -> Resu
         .message
         .map(|message| message.content.trim().to_string())
         .filter(|text| !text.is_empty()))
+}
+
+async fn run_openai_byo_chat(
+    state: &AppState,
+    messages: Vec<OllamaMessage>,
+) -> Result<Option<String>, String> {
+    let api_key = read_openai_byo_key()?
+        .ok_or_else(|| "openai BYO key is not configured. set it in settings first.".to_string())?;
+
+    let base_url = state
+        .openai_base_url
+        .read()
+        .map_err(|err| map_err("failed to read openai base url", err))?
+        .clone();
+
+    let model = state
+        .openai_model
+        .read()
+        .map_err(|err| map_err("failed to read openai model", err))?
+        .clone();
+
+    let url = join_url(base_url.trim(), "/v1/chat/completions")?;
+    let payload = OpenAiChatRequest { model, messages };
+
+    let response = state
+        .http
+        .post(&url)
+        .bearer_auth(api_key)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|err| map_err("openai request failed", err))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("openai response status failed: {} {}", status, body));
+    }
+
+    let payload: Value = response
+        .json()
+        .await
+        .map_err(|err| map_err("openai response parse failed", err))?;
+
+    let content = payload
+        .get("choices")
+        .and_then(|choices| choices.as_array())
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string);
+
+    Ok(content)
 }
 
 fn to_sentence(raw: &str) -> String {
@@ -2435,6 +2754,60 @@ pub fn set_gateway_auth_token(state: &AppState, token: String) -> Result<(), Str
 
     persist_current_config(state)?;
     Ok(())
+}
+
+pub fn set_model_provider(state: &AppState, provider: ModelProvider) -> Result<(), String> {
+    {
+        let mut guard = state
+            .model_provider
+            .write()
+            .map_err(|err| map_err("failed to update model provider", err))?;
+        *guard = provider;
+    }
+
+    persist_current_config(state)?;
+    Ok(())
+}
+
+pub fn set_openai_config(
+    state: &AppState,
+    base_url: Option<String>,
+    model: Option<String>,
+) -> Result<(), String> {
+    if let Some(base_url) = base_url {
+        let mut guard = state
+            .openai_base_url
+            .write()
+            .map_err(|err| map_err("failed to update openai base url", err))?;
+        *guard = base_url.trim().to_string();
+    }
+
+    if let Some(model) = model {
+        let mut guard = state
+            .openai_model
+            .write()
+            .map_err(|err| map_err("failed to update openai model", err))?;
+        *guard = model.trim().to_string();
+    }
+
+    persist_current_config(state)?;
+    Ok(())
+}
+
+pub fn get_openai_byo_key_status() -> Result<OpenAiByoKeyStatus, String> {
+    let configured = read_openai_byo_key()?.is_some();
+    Ok(OpenAiByoKeyStatus {
+        configured,
+        source: "os-keyring".to_string(),
+    })
+}
+
+pub fn set_openai_byo_key(key: String) -> Result<(), String> {
+    set_openai_byo_key_os(&key)
+}
+
+pub fn clear_openai_byo_key() -> Result<(), String> {
+    clear_openai_byo_key_os()
 }
 
 pub fn set_ollama_config(
@@ -2772,7 +3145,7 @@ pub async fn summarize_node(
     state: &AppState,
     raw_node: String,
 ) -> Result<Option<AiSummary>, String> {
-    let text = run_ollama_chat(
+    let text = run_model_chat(
         state,
         vec![
             OllamaMessage {
@@ -2784,6 +3157,7 @@ pub async fn summarize_node(
                 content: raw_node,
             },
         ],
+        "transmutation",
     )
     .await?;
 
@@ -2809,7 +3183,7 @@ pub async fn chat_compose(
     });
     messages.append(&mut conversation);
 
-    run_ollama_chat(state, messages).await
+    run_model_chat(state, messages, "chat").await
 }
 
 pub fn get_compose_encode_preamble() -> String {
@@ -2858,7 +3232,7 @@ pub async fn encode_compose(
         ),
     });
 
-    let text = run_ollama_chat(state, encode_messages)
+    let text = run_model_chat(state, encode_messages, "transmutation")
     .await?
     .ok_or_else(|| "model returned an empty encode response".to_string())?;
 
