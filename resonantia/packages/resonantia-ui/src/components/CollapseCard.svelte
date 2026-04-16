@@ -35,6 +35,7 @@
   let aiStatus: string | null = null;
   let lastSyntheticId: string | null = null;
   let showMoreTargets = false;
+  let cardMoreOpen = false;
   let pendingLaunchUrl: string | null = null;
   let pendingLaunchLabel: string | null = null;
   let pendingLaunchPayloadLabel: string | null = null;
@@ -65,6 +66,7 @@
       aiMenu = null;
       aiStatus = null;
       showMoreTargets = false;
+      cardMoreOpen = false;
       pendingLaunchUrl = null;
       pendingLaunchLabel = null;
       pendingLaunchPayloadLabel = null;
@@ -110,6 +112,14 @@
     showMoreTargets = false;
   }
 
+  function toggleCardMore() {
+    cardMoreOpen = !cardMoreOpen;
+    if (!cardMoreOpen) {
+      aiMenu = null;
+      showMoreTargets = false;
+    }
+  }
+
   function buildContextDeepLinkPrompt() {
     if (!data?.nodeDto) return '';
 
@@ -127,6 +137,26 @@
       'Use clipboard context for full details.',
     ].join('\n');
   }
+
+  function extractContextSummary(rawNode: string): string | null {
+    if (!rawNode.trim()) {
+      return null;
+    }
+
+    const quotedMatch = rawNode.match(/context_summary(?:\([^)]*\))?\s*:\s*"([^"]+)"/i);
+    const unquotedMatch = rawNode.match(/context_summary(?:\([^)]*\))?\s*:\s*([^,\n}]+)/i);
+    const source = quotedMatch?.[1] ?? unquotedMatch?.[1] ?? '';
+    const cleaned = source
+      .trim()
+      .replace(/^['"`]+|['"`]+$/g, '')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return cleaned || null;
+  }
+
+  $: contextSummary = data?.nodeDto ? extractContextSummary(data.nodeDto.raw) : null;
 
   async function copyText(text: string) {
     if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
@@ -381,6 +411,13 @@
 
   <div class="whisper-timestamp">{timestamp}</div>
 
+  {#if contextSummary}
+    <div class="whisper-context-summary" role="note" aria-label="Context summary">
+      <span class="whisper-context-summary-label">thread</span>
+      <p class="whisper-context-summary-value" title={contextSummary}>{contextSummary}</p>
+    </div>
+  {/if}
+
   <div class="whisper-actions whisper-actions-top">
     <div class="whisper-action-row">
       <button
@@ -402,13 +439,41 @@
 
       <button
         class="whisper-prime-btn"
-        class:active={aiMenu === 'compression'}
-        on:click={() => toggleAiMenu('compression')}
+        class:active={cardMoreOpen}
+        on:click={toggleCardMore}
         disabled={!data?.nodeDto || aiBusy}
       >
-        distill memory
+        {cardMoreOpen ? 'less' : 'more'}
       </button>
     </div>
+
+    {#if cardMoreOpen}
+      <div class="whisper-more-panel" role="region" aria-label="More card actions">
+        <div class="whisper-more-actions">
+          <button
+            class="whisper-more-btn"
+            class:active={aiMenu === 'compression'}
+            on:click={() => toggleAiMenu('compression')}
+            disabled={!data?.nodeDto || aiBusy}
+          >
+            distill memory
+          </button>
+        </div>
+
+        {#if data?.relatedSessions?.length}
+          <div class="whisper-threads whisper-threads-inline">
+            {#each data.relatedSessions.slice(0, 4) as s}
+              <button
+                class="whisper-thread-tag"
+                on:click={() => dispatch('navigate', { sessionId: s.id })}
+              >
+                -> {s.label.split('_').slice(0, 2).join(' ')}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     {#if aiMenu}
       <div class="prime-card" role="region" aria-label={aiMenu === 'context' ? 'Carry thread options' : 'Memory distillation options'}>
@@ -511,19 +576,6 @@
     {/if}
   </div>
 
-  {#if data?.relatedSessions?.length}
-    <div class="whisper-threads whisper-threads-top">
-      {#each data.relatedSessions.slice(0, 4) as s}
-        <button
-          class="whisper-thread-tag"
-          on:click={() => dispatch('navigate', { sessionId: s.id })}
-        >
-          ⟶ {s.label.split('_').slice(0, 2).join(' ')}
-        </button>
-      {/each}
-    </div>
-  {/if}
-
   {#if avec}
     <div class="whisper-avec-grid">
       {#each [
@@ -621,6 +673,37 @@
     margin-bottom: 12px;
   }
 
+  .whisper-context-summary {
+    margin: -4px 0 10px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 0.5px solid rgba(170, 206, 229, 0.2);
+    background: rgba(39, 58, 70, 0.16);
+  }
+
+  .whisper-context-summary-label {
+    display: block;
+    font-size: 8px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(177, 214, 237, 0.64);
+    margin-bottom: 4px;
+  }
+
+  .whisper-context-summary-value {
+    margin: 0;
+    font-size: 10px;
+    line-height: 1.45;
+    color: rgba(214, 232, 244, 0.82);
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: break-word;
+  }
+
   .whisper-avec-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -660,11 +743,12 @@
   }
 
   .whisper-actions {
-    margin-top: 12px;
+    margin-top: 10px;
     position: relative;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
+    width: 100%;
   }
 
   .whisper-actions-top {
@@ -675,6 +759,49 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+    width: 100%;
+  }
+
+  .whisper-more-panel {
+    margin-top: 9px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 8px;
+    border-radius: 10px;
+    border: 0.5px solid rgba(132, 166, 188, 0.18);
+    background: rgba(28, 40, 52, 0.24);
+  }
+
+  .whisper-more-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .whisper-more-btn {
+    font-family: 'Departure Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 7px 9px;
+    border-radius: 999px;
+    border: 0.5px solid rgba(126, 173, 198, 0.24);
+    background: rgba(80, 119, 143, 0.09);
+    color: rgba(191, 223, 242, 0.72);
+    cursor: pointer;
+  }
+
+  .whisper-more-btn.active {
+    color: rgba(224, 240, 249, 0.88);
+    border-color: rgba(141, 192, 223, 0.4);
+    background: rgba(89, 136, 166, 0.15);
+  }
+
+  .whisper-more-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   .whisper-transmute-btn {
@@ -744,7 +871,9 @@
 
   .launch-notice {
     margin-top: 10px;
-    width: min(320px, calc(100vw - 56px));
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     padding: 10px;
     border-radius: 10px;
     border: 0.5px solid rgba(201, 189, 142, 0.34);
@@ -998,15 +1127,15 @@
   }
 
   .whisper-threads {
-    margin-top: 12px;
+    margin-top: 10px;
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
+    width: 100%;
   }
 
-  .whisper-threads-top {
-    margin-top: 10px;
-    margin-bottom: 2px;
+  .whisper-threads-inline {
+    margin-top: 8px;
   }
 
   .whisper-thread-tag {
@@ -1020,6 +1149,10 @@
     color: rgba(255, 255, 255, 0.3);
     cursor: pointer;
     transition: all 0.2s;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .whisper-thread-tag:hover {
     border-color: rgba(255, 255, 255, 0.25);

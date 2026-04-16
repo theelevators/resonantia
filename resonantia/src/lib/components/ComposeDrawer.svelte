@@ -289,21 +289,21 @@
     {/if}
 
     <div class="compose-utility-actions">
-      <button class="compose-link-btn" on:click={copyComposeEncodePrompt} disabled={promptCopyLoading || loading || replyLoading}>
+      <button class="compose-link-btn compose-link-pill compose-link-pill-gold" on:click={copyComposeEncodePrompt} disabled={promptCopyLoading || loading || replyLoading}>
         {promptCopyLoading ? 'copying distill prompt…' : promptCopied ? 'distill prompt copied' : 'copy distill prompt'}
       </button>
       {#if mode === 'live'}
         <span class="compose-utility-divider">•</span>
-        <button class="compose-link-btn" on:click={toggleComposePasteNode} disabled={pasteNodeLoading || loading || replyLoading}>
+        <button class="compose-link-btn compose-link-pill" on:click={toggleComposePasteNode} disabled={pasteNodeLoading || loading || replyLoading}>
           {pasteNodeOpen ? 'hide paste save' : 'paste node to save'}
         </button>
         {#if messages.length > 0}
           <span class="compose-utility-divider">•</span>
-          <button class="compose-link-btn" on:click={clearComposeConversation} disabled={loading || replyLoading}>clear thread</button>
+          <button class="compose-link-btn compose-link-pill" on:click={clearComposeConversation} disabled={loading || replyLoading}>clear thread</button>
         {/if}
       {:else}
         <span class="compose-utility-divider">•</span>
-        <button class="compose-link-btn" data-tour-target="compose-switch-live" on:click={switchComposeToLive} disabled={pasteNodeLoading}>switch to create live</button>
+        <button class="compose-link-btn compose-link-pill compose-link-pill-live" data-tour-target="compose-switch-live" on:click={switchComposeToLive} disabled={pasteNodeLoading}>switch to create live</button>
       {/if}
     </div>
     {#if promptCopyError}
@@ -368,6 +368,10 @@
 {/if}
 
 <style>
+  .drawer-compose {
+    --compose-paste-height: 184px;
+  }
+
   .drawer {
     position: absolute;
     top: 64px;
@@ -498,6 +502,7 @@
   .compose-utility-actions {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 7px;
     margin-top: 7px;
     margin-bottom: 2px;
@@ -511,21 +516,48 @@
   }
 
   .compose-link-btn {
-    border: none;
-    background: transparent;
-    padding: 0;
+    border: 0.5px solid rgba(126, 173, 198, 0.24);
+    background: rgba(80, 119, 143, 0.09);
+    padding: 5px 10px;
     margin: 0;
     font-family: 'Departure Mono', monospace;
     font-size: 9px;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.06em;
     text-transform: lowercase;
-    color: rgba(255, 255, 255, 0.46);
+    border-radius: 999px;
+    color: rgba(191, 223, 242, 0.72);
     cursor: pointer;
-    transition: color 0.2s;
+    transition: color 0.2s, border-color 0.2s, background 0.2s, opacity 0.2s;
   }
 
   .compose-link-btn:hover:not(:disabled) {
-    color: rgba(255, 255, 255, 0.76);
+    color: rgba(224, 240, 249, 0.88);
+    border-color: rgba(141, 192, 223, 0.4);
+    background: rgba(89, 136, 166, 0.15);
+  }
+
+  .compose-link-pill-gold {
+    border-color: rgba(199, 182, 132, 0.34);
+    background: rgba(196, 166, 104, 0.1);
+    color: rgba(229, 214, 182, 0.82);
+  }
+
+  .compose-link-pill-gold:hover:not(:disabled) {
+    color: rgba(247, 235, 210, 0.92);
+    border-color: rgba(215, 191, 136, 0.45);
+    background: rgba(196, 166, 104, 0.16);
+  }
+
+  .compose-link-pill-live {
+    border-color: rgba(153, 193, 121, 0.3);
+    background: rgba(118, 163, 85, 0.1);
+    color: rgba(212, 233, 189, 0.82);
+  }
+
+  .compose-link-pill-live:hover:not(:disabled) {
+    border-color: rgba(180, 219, 148, 0.43);
+    background: rgba(133, 178, 98, 0.17);
+    color: rgba(230, 244, 214, 0.9);
   }
 
   .compose-link-btn:disabled {
@@ -551,8 +583,14 @@
   }
 
   .compose-paste-input {
-    min-height: 184px;
+    min-height: var(--compose-paste-height);
+    height: var(--compose-paste-height);
     margin-bottom: 0;
+    resize: none;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    overflow-x: hidden;
   }
 
   .compose-paste-toolbar {
@@ -571,7 +609,8 @@
 
   .compose-paste-editor {
     position: relative;
-    min-height: 184px;
+    min-height: var(--compose-paste-height);
+    height: var(--compose-paste-height);
     margin-bottom: 0;
     min-width: 0;
   }
@@ -609,6 +648,7 @@
   .compose-paste-preview :global(span) {
     overflow-wrap: anywhere;
     word-break: break-word;
+    max-width: 100%;
   }
 
   .compose-paste-preview :global(.sttp-empty) {
@@ -637,15 +677,17 @@
   }
 
   .compose-paste-preview :global(.sttp-keyword) {
-    color: #d9a7ff;
+    color: #efc995;
   }
 
   .drawer-compose.importare .compose-paste-input {
     min-height: 224px;
+    height: 224px;
   }
 
   .drawer-compose.importare .compose-paste-editor {
     min-height: 224px;
+    height: 224px;
   }
 
   .compose-paste-input-highlighted {
@@ -656,6 +698,10 @@
     color: transparent;
     -webkit-text-fill-color: transparent;
     caret-color: rgba(244, 247, 255, 0.92);
+    overflow-x: hidden;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .compose-paste-input-highlighted::selection {
@@ -781,15 +827,21 @@
     font-size: 10px;
     letter-spacing: 0.08em;
     padding: 6px 14px;
-    border-radius: 5px;
+    border-radius: 999px;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: color 0.2s, border-color 0.2s, background 0.2s, opacity 0.2s;
   }
 
   .drawer-btn.cancel {
     background: transparent;
     border: 0.5px solid rgba(255, 255, 255, 0.1);
     color: rgba(255, 255, 255, 0.3);
+  }
+
+  .drawer-btn.cancel:hover:not(:disabled) {
+    border-color: rgba(255, 255, 255, 0.22);
+    color: rgba(255, 255, 255, 0.62);
+    background: rgba(255, 255, 255, 0.04);
   }
 
   .drawer-btn.submit {
@@ -810,7 +862,7 @@
 
   .drawer-error {
     font-size: 10px;
-    color: rgba(233, 148, 58, 0.8);
+    color: rgba(233, 148, 58, 0.88);
     margin: 6px 0 0;
   }
 

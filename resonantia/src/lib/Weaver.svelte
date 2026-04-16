@@ -3256,6 +3256,27 @@
     }
   }
 
+  function extractSessionIdFromPastedNode(rawNode: string): string | null {
+    const source = rawNode.trim();
+    if (!source) {
+      return null;
+    }
+
+    const match = source.match(/(?:session_id|sessionId)\s*:\s*(?:"([^"]+)"|'([^']+)'|([^,\n}\s]+))/i);
+    const parsed = (match?.[1] ?? match?.[2] ?? match?.[3] ?? '').trim();
+    return parsed || null;
+  }
+
+  $: {
+    const parsedSessionId = extractSessionIdFromPastedNode(composePasteNodeDraft);
+    if (parsedSessionId && composeSessionId.trim() !== parsedSessionId) {
+      composeSessionId = parsedSessionId;
+      if (composeError && /session id is required/i.test(composeError)) {
+        composeError = null;
+      }
+    }
+  }
+
   async function sendComposeMessage() {
     const text = composeDraft.trim();
     if (!text || composeReplyLoading || composeLoading) {
