@@ -2456,10 +2456,18 @@
     settingsSaved = false;
     try {
       await resonantiaClient.setOpenAiByoKey(trimmed);
+      const status = await resonantiaClient.getOpenAiByoKeyStatus();
+      openaiByoKeyConfigured = status.configured;
+      openaiByoKeySource = status.source;
+      if (!status.configured) {
+        throw new Error(
+          'key saved but could not be loaded from secure storage. please verify your system keychain is available and unlocked.'
+        );
+      }
       openaiByoKeyInput = '';
-      await refreshOpenAiByoKeyStatus();
       settingsSaved = true;
     } catch (err) {
+      openaiByoKeyConfigured = false;
       openaiByoKeyError = String(err);
     } finally {
       openaiByoKeyBusy = false;
@@ -2476,8 +2484,9 @@
     settingsSaved = false;
     try {
       await resonantiaClient.clearOpenAiByoKey();
+      openaiByoKeyConfigured = false;
+      openaiByoKeySource = 'os-keyring';
       openaiByoKeyInput = '';
-      await refreshOpenAiByoKeyStatus();
       settingsSaved = true;
     } catch (err) {
       openaiByoKeyError = String(err);

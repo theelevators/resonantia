@@ -385,6 +385,7 @@ pub struct AppState {
     ollama_model: RwLock<String>,
     openai_base_url: RwLock<String>,
     openai_model: RwLock<String>,
+    openai_byo_key_cache: RwLock<Option<String>>,
     layout_overrides: RwLock<LayoutOverrides>,
     config_path: RwLock<Option<PathBuf>>,
     sttp_runtime: RwLock<Arc<SttpRuntime>>,
@@ -404,6 +405,7 @@ impl Default for AppState {
             ollama_model: RwLock::new(DEFAULT_OLLAMA_MODEL.to_string()),
             openai_base_url: RwLock::new(DEFAULT_OPENAI_BASE_URL.to_string()),
             openai_model: RwLock::new(DEFAULT_OPENAI_MODEL.to_string()),
+            openai_byo_key_cache: RwLock::new(None),
             layout_overrides: RwLock::new(LayoutOverrides::default()),
             config_path: RwLock::new(None),
             sttp_runtime: RwLock::new(sttp_runtime),
@@ -915,6 +917,32 @@ fn clear_openai_byo_key_os() -> Result<(), String> {
     match entry.delete_credential() {
         Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
         Err(err) => Err(map_err("failed to clear openai BYO key from OS keyring", err)),
+    }
+}
+
+fn read_openai_byo_key_with_fallback(state: &AppState) -> Result<Option<String>, String> {
+    match read_openai_byo_key() {
+        Ok(Some(key)) => {
+            if let Ok(mut guard) = state.openai_byo_key_cache.write() {
+                *guard = Some(key.clone());
+            }
+            Ok(Some(key))
+        }
+        Ok(None) => {
+            if let Ok(mut guard) = state.openai_byo_key_cache.write() {
+                *guard = None;
+            }
+            Ok(None)
+        }
+        Err(err) => {
+            if let Ok(guard) = state.openai_byo_key_cache.read() {
+                if let Some(cached) = guard.clone() {
+                    eprintln!("openai BYO keyring read failed; using session cache: {err}");
+                    return Ok(Some(cached));
+                }
+            }
+            Err(err)
+        }
     }
 }
 
@@ -2468,8 +2496,11 @@ async fn run_openai_byo_chat(
     state: &AppState,
     messages: Vec<OllamaMessage>,
 ) -> Result<Option<String>, String> {
-    let api_key = read_openai_byo_key()?
-        .ok_or_else(|| "openai BYO key is not configured. set it in settings first.".to_string())?;
+    let api_key = read_openai_byo_key_with_fallback(state)?
+        .ok_or_else(|| {
+            "openai BYO key is not configured or not readable. set it in settings first and ensure your system keychain is available."
+                .to_string()
+        })?;
 
     let base_url = state
         .openai_base_url
@@ -2794,20 +2825,32 @@ pub fn set_openai_config(
     Ok(())
 }
 
-pub fn get_openai_byo_key_status() -> Result<OpenAiByoKeyStatus, String> {
-    let configured = read_openai_byo_key()?.is_some();
+pub fn get_openai_byo_key_status(state: &AppState) -> Result<OpenAiByoKeyStatus, String> {
+    let configured = read_openai_byo_key_with_fallback(state)?.is_some();
     Ok(OpenAiByoKeyStatus {
         configured,
         source: "os-keyring".to_string(),
     })
 }
 
-pub fn set_openai_byo_key(key: String) -> Result<(), String> {
-    set_openai_byo_key_os(&key)
+pub fn set_openai_byo_key(state: &AppState, key: String) -> Result<(), String> {
+    set_openai_byo_key_os(&key)?;
+    let mut guard = state
+        .openai_byo_key_cache
+        .write()
+        .map_err(|err| map_err("failed to update openai BYO key cache", err))?;
+    *guard = Some(key.trim().to_string());
+    Ok(())
 }
 
-pub fn clear_openai_byo_key() -> Result<(), String> {
-    clear_openai_byo_key_os()
+pub fn clear_openai_byo_key(state: &AppState) -> Result<(), String> {
+    clear_openai_byo_key_os()?;
+    let mut guard = state
+        .openai_byo_key_cache
+        .write()
+        .map_err(|err| map_err("failed to clear openai BYO key cache", err))?;
+    *guard = None;
+    Ok(())
 }
 
 pub fn set_ollama_config(

@@ -182,7 +182,7 @@
             </button>
           </div>
 
-          <p class="settings-note">key status: {openaiByoKeyConfigured ? 'configured' : 'not set'}</p>
+          <p class="settings-note">key status: {openaiByoKeyConfigured ? 'set' : 'not set'}</p>
           {#if openaiByoKeyError}
             <p class="drawer-error settings-inline-warning">{openaiByoKeyError}</p>
           {/if}

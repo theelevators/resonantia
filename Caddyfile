@@ -1,0 +1,60 @@
+(security_headers) {
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer-when-downgrade
+    }
+}
+
+(block_disallowed_bots) {
+    @disallowed_bots {
+        header_regexp User-Agent (?i)(GPTBot|ChatGPT-User|Google-Extended)
+    }
+
+    handle @disallowed_bots {
+        abort
+    }
+}
+
+app.resonantia.me {
+    import block_disallowed_bots
+
+    encode zstd gzip
+
+    handle {
+        reverse_proxy resonantia-web:4173
+    }
+
+    import security_headers
+}
+
+account.resonantia.me {
+    import block_disallowed_bots
+
+    # Keep Stripe success/cancel URLs on account.resonantia.me rooted at /account.
+    @account_root path /
+    rewrite @account_root /account
+
+    encode zstd gzip
+
+    handle {
+        reverse_proxy resonantia-web:4173
+    }
+
+    import security_headers
+}
+
+api.resonantia.me, gateway.resonantia.me {
+    # Explicit webhook route (Stripe posts here).
+    handle /stripe/webhook {
+        reverse_proxy resonantia-gateway:8090
+    }
+
+    # All other gateway API routes.
+    handle {
+        reverse_proxy resonantia-gateway:8090
+    }
+
+    import security_headers
+}

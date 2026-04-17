@@ -60,18 +60,23 @@ fn set_openai_config(
 }
 
 #[tauri::command]
-fn get_openai_byo_key_status() -> Result<core::OpenAiByoKeyStatus, String> {
-    core::get_openai_byo_key_status()
+fn get_openai_byo_key_status(
+    state: tauri::State<'_, core::AppState>,
+) -> Result<core::OpenAiByoKeyStatus, String> {
+    core::get_openai_byo_key_status(state.inner())
 }
 
 #[tauri::command]
-fn set_openai_byo_key(key: String) -> Result<(), String> {
-    core::set_openai_byo_key(key)
+fn set_openai_byo_key(
+    state: tauri::State<'_, core::AppState>,
+    key: String,
+) -> Result<(), String> {
+    core::set_openai_byo_key(state.inner(), key)
 }
 
 #[tauri::command]
-fn clear_openai_byo_key() -> Result<(), String> {
-    core::clear_openai_byo_key()
+fn clear_openai_byo_key(state: tauri::State<'_, core::AppState>) -> Result<(), String> {
+    core::clear_openai_byo_key(state.inner())
 }
 
 #[tauri::command]
