@@ -205,11 +205,11 @@
           <input class="drawer-input" type="text" placeholder="llama3.2" bind:value={ollamaModel} disabled={loading || saving} />
         </label>
 
-        <span class="settings-subsection-label">bring your own cloud</span>
-        <p class="settings-note settings-byoc-intro">Only set this if you self-host a Resonantia gateway. Leave blank to use the hosted service.</p>
+        <span class="settings-subsection-label">bring your own sync gateway</span>
+        <p class="settings-note settings-byoc-intro">Use this for node storage and session sync only. Account, billing, and managed AI always use Resonantia hosted services.</p>
 
         <label class="settings-field">
-          <span class="settings-label">gateway url</span>
+          <span class="settings-label">sync gateway url</span>
           <input
             class="drawer-input"
             type="text"
@@ -230,8 +230,8 @@
 
         {#if showTechnicalTokenField}
           <label class="settings-field">
-            <span class="settings-label">auth token</span>
-            <span class="settings-note">Set automatically after sign in. Only paste manually if instructed.</span>
+            <span class="settings-label">sync auth token</span>
+            <span class="settings-note">Set automatically after sign in when using managed sync. Paste manually only for BYO gateways that require auth.</span>
             <input
               class="drawer-input"
               type="password"

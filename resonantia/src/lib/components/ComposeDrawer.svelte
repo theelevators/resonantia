@@ -872,6 +872,14 @@
     margin: 6px 0 0;
   }
 
+  @media (hover: none) and (pointer: coarse) {
+    .drawer-compose .drawer-input,
+    .drawer-compose .drawer-textarea {
+      font-size: 16px;
+      line-height: 1.35;
+    }
+  }
+
   @media (max-width: 520px) {
     .drawer {
       top: calc(var(--safe-top) + 56px);

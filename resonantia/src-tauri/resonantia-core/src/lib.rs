@@ -2354,6 +2354,21 @@ async fn run_model_chat(
     }
 
     if model_provider == ModelProvider::Ollama {
+        let ollama_base_url = state
+            .ollama_base_url
+            .read()
+            .map_err(|err| map_err("failed to read ollama url", err))?
+            .clone();
+        let ollama_model = state
+            .ollama_model
+            .read()
+            .map_err(|err| map_err("failed to read ollama model", err))?
+            .clone();
+
+        if ollama_base_url.trim().is_empty() || ollama_model.trim().is_empty() {
+            return run_gateway_then_ollama_chat(state, messages, purpose).await;
+        }
+
         return run_ollama_chat(state, messages).await;
     }
 
@@ -2365,7 +2380,7 @@ async fn run_gateway_then_ollama_chat(
     messages: Vec<OllamaMessage>,
     purpose: &str,
 ) -> Result<Option<String>, String> {
-    let gateway_base_url = state
+    let configured_gateway_base_url = state
         .gateway_base_url
         .read()
         .map_err(|err| map_err("failed to read gateway url", err))?
@@ -2376,7 +2391,13 @@ async fn run_gateway_then_ollama_chat(
         .map_err(|err| map_err("failed to read gateway auth token", err))?
         .clone();
 
-    let gateway_base = gateway_base_url.trim().trim_end_matches('/').to_string();
+    let managed_gateway_base = DEFAULT_GATEWAY_BASE_URL.trim().trim_end_matches('/').to_string();
+    let gateway_base = if managed_gateway_base.is_empty() {
+        configured_gateway_base_url.trim().trim_end_matches('/').to_string()
+    } else {
+        managed_gateway_base
+    };
+
     if !gateway_base.is_empty() {
         let paths = ["/api/v1/ai/chat", "/api/ai/chat", "/ai/chat"];
         let payload = GatewayAiChatRequest {

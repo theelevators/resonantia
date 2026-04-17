@@ -1,5 +1,5 @@
 import { Clerk } from '@clerk/clerk-js';
-import { getClerkPublishableKey, getClerkGatewayTokenTemplate } from '$lib/config';
+import { getClerkPublishableKey, getClerkGatewayTokenTemplate, getGatewayBaseUrl } from '$lib/config';
 
 export type CloudAuthStatus = {
   available: boolean;
@@ -34,6 +34,10 @@ function normalizeGatewayBaseUrl(value: string): string {
 
   // Avoid route-relative fetches like `gateway/api/...` from `/account`.
   return `/${trimmed}`;
+}
+
+function resolveManagedGatewayBaseUrl(): string {
+  return normalizeGatewayBaseUrl(getGatewayBaseUrl());
 }
 
 async function loadClerk(): Promise<Clerk | null> {
@@ -144,15 +148,12 @@ export type CloudAccount = {
   memberSince: string;
 };
 
-export async function getCloudAccount(
-  gatewayBaseUrl: string,
-  gatewayAuthToken: string
-): Promise<CloudAccount | null> {
-  if (!gatewayBaseUrl || !gatewayAuthToken) {
+export async function getCloudAccount(gatewayAuthToken: string): Promise<CloudAccount | null> {
+  if (!gatewayAuthToken) {
     return null;
   }
 
-  const base = normalizeGatewayBaseUrl(gatewayBaseUrl);
+  const base = resolveManagedGatewayBaseUrl();
   if (!base) {
     return null;
   }
@@ -167,17 +168,14 @@ export async function getCloudAccount(
   }
 }
 
-export async function createCustomerPortal(
-  gatewayBaseUrl: string,
-  gatewayAuthToken: string
-): Promise<string> {
-  if (!gatewayBaseUrl || !gatewayAuthToken) {
-    throw new Error('Gateway URL and auth token are required for the billing portal.');
+export async function createCustomerPortal(gatewayAuthToken: string): Promise<string> {
+  if (!gatewayAuthToken) {
+    throw new Error('Managed gateway auth token is required for the billing portal.');
   }
 
-  const base = normalizeGatewayBaseUrl(gatewayBaseUrl);
+  const base = resolveManagedGatewayBaseUrl();
   if (!base) {
-    throw new Error('Gateway URL is not configured.');
+    throw new Error('Managed gateway URL is not configured.');
   }
   const res = await fetch(`${base}/api/v1/customer-portal`, {
     method: 'POST',
@@ -195,17 +193,16 @@ export async function createCustomerPortal(
 }
 
 export async function createCheckoutSession(
-  gatewayBaseUrl: string,
   gatewayAuthToken: string,
   tier: 'resonant' | 'soulful'
 ): Promise<string> {
-  if (!gatewayBaseUrl || !gatewayAuthToken) {
-    throw new Error('Gateway URL and auth token are required for checkout.');
+  if (!gatewayAuthToken) {
+    throw new Error('Managed gateway auth token is required for checkout.');
   }
 
-  const base = normalizeGatewayBaseUrl(gatewayBaseUrl);
+  const base = resolveManagedGatewayBaseUrl();
   if (!base) {
-    throw new Error('Gateway URL is not configured.');
+    throw new Error('Managed gateway URL is not configured.');
   }
   const res = await fetch(`${base}/api/v1/checkout`, {
     method: 'POST',

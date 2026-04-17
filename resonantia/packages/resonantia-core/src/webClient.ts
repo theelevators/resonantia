@@ -231,6 +231,10 @@ function readString(record: UnknownRecord, ...keys: string[]): string {
   return "";
 }
 
+function hasAnyKey(record: UnknownRecord, ...keys: string[]): boolean {
+  return keys.some((key) => Object.prototype.hasOwnProperty.call(record, key));
+}
+
 function readNumber(record: UnknownRecord, ...keys: string[]): number {
   for (const key of keys) {
     const value = record[key];
@@ -564,6 +568,21 @@ function gatewayPathsFor(baseUrl: string, paths: string[]): string[] {
   return paths.map((path) => joinUrl(normalizedBase, path));
 }
 
+function resolveManagedGatewayBaseUrl(): string {
+  const managedFallbackBaseUrl = DEFAULT_GATEWAY_BASE_URL || DEV_GATEWAY_PROXY_PATH;
+  return normalizeGatewayBaseUrl(managedFallbackBaseUrl);
+}
+
+function resolveSyncGatewayBaseUrl(config: AppConfig, overrideBaseUrl?: string): string {
+  const managedFallbackBaseUrl = DEFAULT_GATEWAY_BASE_URL || DEV_GATEWAY_PROXY_PATH;
+  const gatewayBaseUrlRaw =
+    overrideBaseUrl?.trim() ||
+    config.gatewayBaseUrl ||
+    (config.modelProvider === "managed-gateway" ? managedFallbackBaseUrl : "");
+
+  return normalizeGatewayBaseUrl(gatewayBaseUrlRaw);
+}
+
 function readConfigFromLocalStorage(): AppConfig | null {
   if (typeof localStorage === "undefined") {
     return null;
@@ -633,17 +652,68 @@ function writeNodesCacheToLocalStorage(nodes: NodeDto[]): void {
   }
 }
 
+function canonicalRawKey(raw: string): string {
+  return stableHash(`raw:${raw.trim()}`);
+}
+
+function nodeIdentityKeys(node: NodeDto): string[] {
+  const keys: string[] = [];
+  const syncKey = node.syncKey.trim();
+  if (syncKey) {
+    keys.push(`sync:${syncKey}`);
+  }
+
+  const raw = node.raw.trim();
+  if (raw) {
+    keys.push(`raw:${canonicalRawKey(raw)}`);
+  }
+
+  return keys;
+}
+
+function preferNode(existing: NodeDto, candidate: NodeDto): NodeDto {
+  if (candidate.timestamp > existing.timestamp) {
+    return candidate;
+  }
+
+  if (candidate.timestamp < existing.timestamp) {
+    return existing;
+  }
+
+  if (candidate.raw.length > existing.raw.length) {
+    return candidate;
+  }
+
+  return existing;
+}
+
 function mergeNodesBySyncKey(...groups: NodeDto[][]): NodeDto[] {
-  const bySync = new Map<string, NodeDto>();
+  const byId = new Map<string, NodeDto>();
+  const keyToId = new Map<string, string>();
 
   for (const group of groups) {
     for (const node of group) {
       const normalized = normalizeNode(node);
-      bySync.set(normalized.syncKey, normalized);
+      const keys = nodeIdentityKeys(normalized);
+      let id = keys
+        .map((key) => keyToId.get(key))
+        .find((value): value is string => Boolean(value));
+
+      if (!id) {
+        id = normalized.syncKey.trim() || normalized.syntheticId.trim() || canonicalRawKey(normalized.raw);
+      }
+
+      const existing = byId.get(id);
+      const preferred = existing ? preferNode(existing, normalized) : normalized;
+      byId.set(id, preferred);
+
+      for (const key of nodeIdentityKeys(preferred)) {
+        keyToId.set(key, id);
+      }
     }
   }
 
-  return Array.from(bySync.values()).sort(byTimestampDesc);
+  return Array.from(byId.values()).sort(byTimestampDesc);
 }
 
 function defaultConfig(): AppConfig {
@@ -788,7 +858,12 @@ function normalizeAvec(value: unknown): AvecState {
   return withPsi({ stability, friction, logic, autonomy }, psi);
 }
 
-function canonicalSyncKey(node: Pick<NodeDto, "sessionId" | "tier" | "timestamp" | "parentNodeId" | "psi" | "rho" | "kappa">): string {
+function canonicalSyncKey(node: Pick<NodeDto, "raw" | "sessionId" | "tier" | "timestamp" | "parentNodeId" | "psi" | "rho" | "kappa">): string {
+  const raw = node.raw.trim();
+  if (raw) {
+    return stableHash(`raw:${raw}`);
+  }
+
   return stableHash(
     [
       node.sessionId.trim(),
@@ -842,7 +917,8 @@ function toNodeDto(value: unknown): NodeDto | null {
   const kappa = readNumber(record, "kappa");
   const psi = readNumber(record, "psi") || userAvec.psi;
 
-  const syncKey = readString(record, "syncKey", "sync_key").trim() || canonicalSyncKey({
+  const derivedSyncKey = canonicalSyncKey({
+    raw,
     sessionId,
     tier,
     timestamp,
@@ -851,6 +927,7 @@ function toNodeDto(value: unknown): NodeDto | null {
     rho,
     kappa,
   });
+  const syncKey = derivedSyncKey || readString(record, "syncKey", "sync_key").trim();
 
   const syntheticId = readString(record, "syntheticId", "synthetic_id").trim() || nodeFingerprint(
     sessionId,
@@ -879,7 +956,7 @@ function toNodeDto(value: unknown): NodeDto | null {
 }
 
 function normalizeNode(node: NodeDto): NodeDto {
-  const syncKey = node.syncKey.trim() || canonicalSyncKey(node);
+  const syncKey = canonicalSyncKey(node) || node.syncKey.trim();
   const syntheticId = node.syntheticId.trim() || nodeFingerprint(
     node.sessionId,
     node.timestamp,
@@ -997,22 +1074,33 @@ function normalizeConfig(input: unknown): AppConfig {
   const providerRaw = readString(record, "modelProvider", "model_provider").trim();
   const gatewayRaw = readString(record, "gatewayBaseUrl", "gateway_base_url") || DEFAULT_GATEWAY_BASE_URL;
   const gatewayAuthRaw = readString(record, "gatewayAuthToken", "gateway_auth_token") || DEFAULT_GATEWAY_AUTH_TOKEN;
-  const openaiBaseUrlRaw = readString(record, "openaiBaseUrl", "openai_base_url") || DEFAULT_OPENAI_BASE_URL;
-  const openaiModelRaw = readString(record, "openaiModel", "openai_model") || DEFAULT_OPENAI_MODEL;
+  const ollamaBaseUrlRaw = readString(record, "ollamaBaseUrl", "ollama_base_url");
+  const ollamaModelRaw = readString(record, "ollamaModel", "ollama_model");
+  const openaiBaseUrlRaw = readString(record, "openaiBaseUrl", "openai_base_url");
+  const openaiModelRaw = readString(record, "openaiModel", "openai_model");
+  const hasOllamaBaseUrl = hasAnyKey(record, "ollamaBaseUrl", "ollama_base_url");
+  const hasOllamaModel = hasAnyKey(record, "ollamaModel", "ollama_model");
+  const hasOpenAiBaseUrl = hasAnyKey(record, "openaiBaseUrl", "openai_base_url");
+  const hasOpenAiModel = hasAnyKey(record, "openaiModel", "openai_model");
 
   const modelProvider: ModelProvider =
     providerRaw === "ollama" || providerRaw === "openai-byo" || providerRaw === "managed-gateway"
       ? providerRaw
       : DEFAULT_MODEL_PROVIDER;
 
+  const effectiveModelProvider: ModelProvider =
+    isHostedBrowserOrigin() && modelProvider === "ollama"
+      ? "managed-gateway"
+      : modelProvider;
+
   return {
-    modelProvider,
+    modelProvider: effectiveModelProvider,
     gatewayBaseUrl: normalizeGatewayBaseUrl(gatewayRaw),
     gatewayAuthToken: normalizeGatewayAuthToken(gatewayAuthRaw),
-    ollamaBaseUrl: readString(record, "ollamaBaseUrl", "ollama_base_url") || DEFAULT_OLLAMA_BASE_URL,
-    ollamaModel: readString(record, "ollamaModel", "ollama_model") || DEFAULT_OLLAMA_MODEL,
-    openaiBaseUrl: openaiBaseUrlRaw.trim() || DEFAULT_OPENAI_BASE_URL,
-    openaiModel: openaiModelRaw.trim() || DEFAULT_OPENAI_MODEL,
+    ollamaBaseUrl: hasOllamaBaseUrl ? ollamaBaseUrlRaw.trim() : DEFAULT_OLLAMA_BASE_URL,
+    ollamaModel: hasOllamaModel ? ollamaModelRaw.trim() : DEFAULT_OLLAMA_MODEL,
+    openaiBaseUrl: hasOpenAiBaseUrl ? openaiBaseUrlRaw.trim() : DEFAULT_OPENAI_BASE_URL,
+    openaiModel: hasOpenAiModel ? openaiModelRaw.trim() : DEFAULT_OPENAI_MODEL,
     layoutOverrides: {
       sessionOverrides: readObject(layoutOverrides, "sessionOverrides", "session_overrides") as Record<string, { x: number; y: number }>,
       nodeOverrides: readObject(layoutOverrides, "nodeOverrides", "node_overrides") as Record<string, { x: number; y: number }>,
@@ -1571,11 +1659,7 @@ async function runGatewayAiChat(
   messages: ChatMessage[],
   purpose: "chat" | "transmutation",
 ): Promise<string | null> {
-  const managedFallbackBaseUrl = DEFAULT_GATEWAY_BASE_URL || DEV_GATEWAY_PROXY_PATH;
-  const baseUrlRaw =
-    (config.gatewayBaseUrl ?? "").trim() ||
-    (config.modelProvider === "managed-gateway" ? managedFallbackBaseUrl : "");
-  const baseUrl = normalizeGatewayBaseUrl(baseUrlRaw);
+  const baseUrl = resolveManagedGatewayBaseUrl();
   if (!baseUrl) {
     return null;
   }
@@ -1654,11 +1738,18 @@ async function runModelChat(
   messages: ChatMessage[],
   purpose: "chat" | "transmutation",
 ): Promise<string | null> {
+  const hostedOrigin = isHostedBrowserOrigin();
+  const ollamaConfigured = Boolean(config.ollamaBaseUrl.trim()) && Boolean(config.ollamaModel.trim());
+  const effectiveProvider: ModelProvider =
+    config.modelProvider === "ollama" && (hostedOrigin || !ollamaConfigured)
+      ? "managed-gateway"
+      : config.modelProvider;
+
   if (config.modelProvider === "openai-byo") {
     throw new Error("openai BYO keys are only available in the desktop app");
   }
 
-  if (config.modelProvider === "ollama") {
+  if (effectiveProvider === "ollama") {
     return runOllamaChat(config, messages);
   }
 
@@ -1667,8 +1758,15 @@ async function runModelChat(
     if (gatewayText) {
       return gatewayText;
     }
-  } catch {
-    // Fall back to local model if managed gateway AI is unavailable.
+    throw new Error("managed gateway returned an empty response");
+  } catch (error) {
+    // Never force localhost Ollama fallback for hosted web origins.
+    // That path produces mixed-content/loopback errors and blocks paid managed usage.
+    if (hostedOrigin) {
+      throw new Error(`managed gateway AI unavailable: ${errorToString(error)}`);
+    }
+
+    // Local dev convenience: if the app is running on localhost, a local fallback is acceptable.
   }
 
   return runOllamaChat(config, messages);
@@ -2185,12 +2283,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
       const cachedNodesForSync = readNodesCacheFromLocalStorage()
         .filter((node) => !sessionFilter || node.sessionId === sessionFilter)
         .map(normalizeNode);
-      const managedFallbackBaseUrl = DEFAULT_GATEWAY_BASE_URL || DEV_GATEWAY_PROXY_PATH;
-      const gatewayBaseUrlRaw =
-        request.gatewayBaseUrl?.trim() ||
-        config.gatewayBaseUrl ||
-        (config.modelProvider === "managed-gateway" ? managedFallbackBaseUrl : "");
-      const gatewayBaseUrl = normalizeGatewayBaseUrl(gatewayBaseUrlRaw);
+      const gatewayBaseUrl = resolveSyncGatewayBaseUrl(config, request.gatewayBaseUrl);
       const gatewayAuthToken = normalizeGatewayAuthToken(
         request.gatewayAuthToken?.trim() || config.gatewayAuthToken || "",
       );
@@ -2224,7 +2317,13 @@ export function createWebResonantiaClient(): ResonantiaClient {
         : localNodes;
 
       const remoteBeforeUpload = await fetchGatewayNodes(gatewayBaseUrl, sessionFilter, gatewayAuthToken);
-      const remoteKnownKeys = new Set(remoteBeforeUpload.map((node) => node.syncKey));
+      const remoteKnownIdentities = new Set<string>();
+      for (const node of remoteBeforeUpload) {
+        const normalized = normalizeNode(node);
+        for (const key of nodeIdentityKeys(normalized)) {
+          remoteKnownIdentities.add(key);
+        }
+      }
 
       const upload = {
         uploaded: 0,
@@ -2236,7 +2335,9 @@ export function createWebResonantiaClient(): ResonantiaClient {
       };
 
       for (const node of scopedLocalNodes) {
-        if (remoteKnownKeys.has(node.syncKey)) {
+        const markers = nodeIdentityKeys(normalizeNode(node));
+        const alreadyRemote = markers.some((marker) => remoteKnownIdentities.has(marker));
+        if (alreadyRemote) {
           upload.skipped += 1;
           continue;
         }
@@ -2245,6 +2346,10 @@ export function createWebResonantiaClient(): ResonantiaClient {
         if (!outcome.valid) {
           upload.rejected += 1;
           continue;
+        }
+
+        for (const marker of markers) {
+          remoteKnownIdentities.add(marker);
         }
 
         upload.uploaded += 1;
@@ -2265,30 +2370,54 @@ export function createWebResonantiaClient(): ResonantiaClient {
         hasMore: false,
       };
 
-      const localBySync = new Map(localNodes.map((node) => [node.syncKey, node]));
+      const localBySync = new Map<string, NodeDto>();
+      const localByRaw = new Map<string, NodeDto>();
+
+      for (const localNode of localNodes.map(normalizeNode)) {
+        const syncKey = localNode.syncKey.trim();
+        if (syncKey) {
+          localBySync.set(syncKey, localNode);
+        }
+
+        const raw = localNode.raw.trim();
+        if (raw) {
+          localByRaw.set(canonicalRawKey(raw), localNode);
+        }
+      }
 
       for (const remoteNode of remoteNodes) {
         const normalized = normalizeNode(remoteNode);
-        const existing = localBySync.get(normalized.syncKey);
+        const existing = localBySync.get(normalized.syncKey)
+          ?? localByRaw.get(canonicalRawKey(normalized.raw));
 
         if (!existing) {
           await upsertLocalNode(db, normalized);
-          localBySync.set(normalized.syncKey, normalized);
+          if (normalized.syncKey.trim()) {
+            localBySync.set(normalized.syncKey, normalized);
+          }
+          localByRaw.set(canonicalRawKey(normalized.raw), normalized);
           download.created += 1;
           continue;
         }
 
         if (existing.raw === normalized.raw) {
+          if (normalized.syncKey.trim()) {
+            localBySync.set(normalized.syncKey, existing);
+          }
+          localByRaw.set(canonicalRawKey(normalized.raw), existing);
           download.duplicate += 1;
           continue;
         }
 
         await upsertLocalNode(db, normalized);
-        localBySync.set(normalized.syncKey, normalized);
+        if (normalized.syncKey.trim()) {
+          localBySync.set(normalized.syncKey, normalized);
+        }
+        localByRaw.set(canonicalRawKey(normalized.raw), normalized);
         download.updated += 1;
       }
 
-      writeNodesCacheToLocalStorage(Array.from(localBySync.values()));
+      writeNodesCacheToLocalStorage(Array.from(localByRaw.values()));
 
       return {
         sessionId: sessionFilter || "all",

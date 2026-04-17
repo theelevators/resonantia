@@ -2191,11 +2191,6 @@
     return normalized.length === 0 || normalized === managed;
   }
 
-  function resolveEffectiveGatewayBaseUrl(inputValue: string) {
-    const trimmed = inputValue.trim();
-    return trimmed || MANAGED_GATEWAY_BASE_URL;
-  }
-
   function displayGatewayInputFromConfig(configured: string) {
     return isManagedGatewayBaseUrl(configured) ? '' : configured;
   }
@@ -2334,8 +2329,7 @@
       if (status.signedIn) {
         const marker = status.username ?? (status.userId ? status.userId.slice(0, 8) : null);
         cloudAuthStatus = `cloud account connected${marker ? ` · ${marker}` : ''}`;
-        const effectiveGatewayBaseUrl = resolveEffectiveGatewayBaseUrl(gatewayBaseUrl);
-        const account = await getCloudAccount(effectiveGatewayBaseUrl, gatewayAuthToken).catch(() => null);
+        const account = await getCloudAccount(gatewayAuthToken).catch(() => null);
         cloudAccountTier = account?.tier ?? null;
         cloudAccountMemberSince = account?.memberSince ?? null;
       } else {
@@ -2359,6 +2353,13 @@
     cloudAuthBusy = true;
     cloudAuthError = null;
     try {
+      const status = await getCloudAuthStatus();
+      if (status.signedIn) {
+        gatewayAuthToken = '';
+        await resonantiaClient.setGatewayAuthToken('');
+        await signOutCloud();
+      }
+
       // Redirect to Clerk's hosted sign-in; returns to current URL after auth.
       // (openSignIn modal requires the full Clerk UI bundle which is unavailable
       // in the @clerk/clerk-js npm/ESM build — only the CDN script includes it.)

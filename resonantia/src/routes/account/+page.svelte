@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { AVEC_COLORS } from '@resonantia/core';
-  import { getGatewayBaseUrl } from '$lib/config';
   import {
     getCloudAuthStatus,
     getGatewayAuthToken,
@@ -27,8 +26,6 @@
   let portalBusy = false;
   let portalError: string | null = null;
   let appHomeUrl = '/';
-
-  const gatewayBaseUrl = getGatewayBaseUrl();
 
   function resolveAppHomeUrl(): string {
     if (typeof window === 'undefined') {
@@ -358,9 +355,7 @@
       }
       userId = status.username ?? status.userId;
       const token = await getGatewayAuthToken().catch(() => '');
-      const account = gatewayBaseUrl
-        ? await getCloudAccount(gatewayBaseUrl, token).catch(() => null)
-        : null;
+      const account = await getCloudAccount(token).catch(() => null);
       accountTier = account?.tier ?? null;
       memberSince = account?.memberSince ?? null;
       phase = 'signed-in';
@@ -411,7 +406,7 @@
       let url: string;
 
       try {
-        url = await createCheckoutSession(gatewayBaseUrl, token, tier);
+        url = await createCheckoutSession(token, tier);
       } catch (err) {
         const message = String(err);
         // Recover once from edge-of-expiry JWTs by forcing a second fresh token fetch.
@@ -419,7 +414,7 @@
           throw err;
         }
         token = await getGatewayAuthToken();
-        url = await createCheckoutSession(gatewayBaseUrl, token, tier);
+        url = await createCheckoutSession(token, tier);
       }
 
       window.location.href = url;
@@ -437,7 +432,7 @@
     portalError = null;
     try {
       const token = await getGatewayAuthToken();
-      const url = await createCustomerPortal(gatewayBaseUrl, token);
+      const url = await createCustomerPortal(token);
       window.location.href = url;
     } catch (err) {
       portalError = String(err);
