@@ -3,7 +3,16 @@ import { sveltekit } from "@sveltejs/kit/vite";
 
 const host = process.env.TAURI_DEV_HOST;
 
-const defaultAllowedHosts = ["localhost", "127.0.0.1", "resonantia.levare.cloud"];
+const defaultAllowedHosts = [
+  "localhost",
+  "127.0.0.1",
+  "resonantia.levare.cloud",
+  "resonantia.me",
+  "app.resonantia.me",
+  "account.resonantia.me",
+  "api.resonantia.me",
+  "gateway.resonantia.me",
+];
 /** @type {string[]} */
 const envAllowedHosts = (process.env.VITE_ALLOWED_HOSTS ?? "")
   .split(",")

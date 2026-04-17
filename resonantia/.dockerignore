@@ -13,6 +13,11 @@ build
 npm-debug.log*
 *.log
 
+# Environment files (never send secrets to build context)
+.env
+.env.*
+!.env.example
+
 # Tauri build artifacts (large, not needed for web image)
 src-tauri/target
 

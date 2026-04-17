@@ -631,6 +631,7 @@ async fn checkout_handler(
     // Build form body for Stripe Checkout Session creation.
     let params = [
         ("mode", "subscription"),
+        ("allow_promotion_codes", "true"),
         ("line_items[0][price]", price_id),
         ("line_items[0][quantity]", "1"),
         ("success_url", stripe.success_url.as_str()),

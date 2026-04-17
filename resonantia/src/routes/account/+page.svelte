@@ -26,8 +26,26 @@
   let checkoutError: string | null = null;
   let portalBusy = false;
   let portalError: string | null = null;
+  let appHomeUrl = '/';
 
   const gatewayBaseUrl = getGatewayBaseUrl();
+
+  function resolveAppHomeUrl(): string {
+    if (typeof window === 'undefined') {
+      return '/';
+    }
+
+    const { protocol, hostname } = window.location;
+    if (hostname === 'account.resonantia.me') {
+      return `${protocol}//app.resonantia.me/`;
+    }
+
+    if (hostname.startsWith('account.')) {
+      return `${protocol}//app.${hostname.slice('account.'.length)}/`;
+    }
+
+    return '/';
+  }
 
   // ── Canvas stars ────────────────────────────────────────────────────────────
   let canvas: HTMLCanvasElement;
@@ -443,6 +461,8 @@
   let paymentStatus: 'success' | 'cancelled' | null = null;
 
   onMount(() => {
+    appHomeUrl = resolveAppHomeUrl();
+
     const params = new URLSearchParams(window.location.search);
     const ps = params.get('payment');
     if (ps === 'success') paymentStatus = 'success';
@@ -467,7 +487,7 @@
   <canvas bind:this={canvas} class="bg-canvas" aria-hidden="true"></canvas>
 
   <header class="topbar">
-    <a href="/" class="wordmark">resonantia</a>
+    <a href={appHomeUrl} class="wordmark">resonantia</a>
     <span class="topbar-label">account</span>
   </header>
 
@@ -620,7 +640,7 @@
 
         <!-- Back to app + sign out -->
         <div class="footer-actions">
-          <a href="/" class="action-btn secondary">open app</a>
+          <a href={appHomeUrl} class="action-btn secondary">open app</a>
           {#if authError}
             <p class="inline-error">{authError}</p>
           {/if}
@@ -635,7 +655,7 @@
   </main>
 
   <footer class="page-footer">
-    <span>resonantia · <a href="/" class="footer-link">open app</a></span>
+    <span>resonantia · <a href={appHomeUrl} class="footer-link">open app</a></span>
   </footer>
 </div>
 

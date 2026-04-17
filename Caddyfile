@@ -22,6 +22,19 @@ app.resonantia.me {
 
     encode zstd gzip
 
+    # Proxy-prefixed gateway calls from the web client.
+    handle_path /__gateway_proxy__/* {
+        reverse_proxy resonantia-gateway:8090
+    }
+
+    handle_path /gateway_proxy/* {
+        reverse_proxy resonantia-gateway:8090
+    }
+
+    handle_path /gateway/* {
+        reverse_proxy resonantia-gateway:8090
+    }
+
     handle {
         reverse_proxy resonantia-web:4173
     }
@@ -32,11 +45,24 @@ app.resonantia.me {
 account.resonantia.me {
     import block_disallowed_bots
 
-    # Keep Stripe success/cancel URLs on account.resonantia.me rooted at /account.
+    # Root should redirect so browser URL is /account (SPA route), not just upstream rewrite.
     @account_root path /
-    rewrite @account_root /account
+    redir @account_root /account 308
 
     encode zstd gzip
+
+    # Proxy-prefixed gateway calls from the web client.
+    handle_path /__gateway_proxy__/* {
+        reverse_proxy resonantia-gateway:8090
+    }
+
+    handle_path /gateway_proxy/* {
+        reverse_proxy resonantia-gateway:8090
+    }
+
+    handle_path /gateway/* {
+        reverse_proxy resonantia-gateway:8090
+    }
 
     handle {
         reverse_proxy resonantia-web:4173

@@ -100,6 +100,7 @@
   let onboardingOpen = false;
   let onboardingDismissed = false;
   let onboardingHydrated = false;
+  let adventureReplayFollowup: WalkthroughMode | null = null;
   let adventureOpen = false;
   let adventureCompleted = false;
   let adventureHydrated = false;
@@ -396,7 +397,7 @@
     renameSessionError = null;
 
     try {
-      const config = await resonantiaClient.getConfig();
+      let config = await resonantiaClient.getConfig();
       const configuredGateway = (config.gatewayBaseUrl ?? '').trim();
       const usingManagedGateway = isManagedGatewayBaseUrl(configuredGateway);
       let syncAuthToken = (config.gatewayAuthToken ?? '').trim();
@@ -818,12 +819,18 @@
   }
 
   function openOnboardingTutorial() {
-    openWalkthrough('demo');
+    openCinematicDemo();
   }
 
   function openCinematicDemo() {
     menuOpen = false;
-    openWalkthrough('demo');
+    dismissOnboarding(false);
+    closeTelescope();
+    closeTransientUi();
+    syncDetailAutoOpen = false;
+    syncDetailHover = false;
+    adventureReplayFollowup = 'demo';
+    adventureOpen = true;
   }
 
   function averageAvecStates(states: Array<{ stability: number; friction: number; logic: number; autonomy: number; psi: number }>) {
@@ -2194,7 +2201,7 @@
   }
 
   function hasPaidCloudTier(tier: string | null) {
-    return tier === 'resonant' || tier === 'soulful';
+    return tier === 'resonant' || tier === 'soulful' || tier === 'subscriber';
   }
 
   function isLoopbackHostName(hostname: string) {
@@ -2294,7 +2301,7 @@
     openaiByoKeyError = null;
 
     try {
-      const config = await resonantiaClient.getConfig();
+      let config = await resonantiaClient.getConfig();
       modelProvider = config.modelProvider;
       gatewayBaseUrl = displayGatewayInputFromConfig(config.gatewayBaseUrl ?? '');
       gatewayAuthToken = config.gatewayAuthToken ?? '';
@@ -3393,11 +3400,19 @@
     clearSyncDetailTimer();
 
     try {
-      const config = await resonantiaClient.getConfig();
+      let config = await resonantiaClient.getConfig();
       const configuredGateway = (config.gatewayBaseUrl ?? '').trim();
       const usingManagedGateway = isManagedGatewayBaseUrl(configuredGateway);
 
       if (usingManagedGateway) {
+        try {
+          await refreshGatewayAuthTokenForSync();
+          const refreshed = await resonantiaClient.getConfig();
+          config = refreshed;
+        } catch (tokenError) {
+          cloudAuthError = String(tokenError);
+        }
+
         await refreshCloudAuthState();
       }
 
@@ -3849,6 +3864,16 @@
     adventureOpen = false;
     adventureCompleted = true;
     persistAdventureCompleted();
+
+    if (adventureReplayFollowup === 'demo') {
+      adventureReplayFollowup = null;
+      void persistAdventureMemory(detail);
+      setTimeout(() => {
+        openWalkthrough('demo');
+      }, 320);
+      return;
+    }
+
     void continueIntoWalkthroughAfterAdventure(detail);
   }
 
@@ -3856,6 +3881,13 @@
     adventureOpen = false;
     adventureCompleted = true;
     persistAdventureCompleted();
+
+    if (adventureReplayFollowup === 'demo') {
+      adventureReplayFollowup = null;
+      openWalkthrough('demo');
+      return;
+    }
+
     // onboardingDismissed stays false → reactive fires openWalkthrough('first-run')
   }
 

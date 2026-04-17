@@ -1571,7 +1571,11 @@ async function runGatewayAiChat(
   messages: ChatMessage[],
   purpose: "chat" | "transmutation",
 ): Promise<string | null> {
-  const baseUrl = normalizeGatewayBaseUrl(config.gatewayBaseUrl ?? "");
+  const managedFallbackBaseUrl = DEFAULT_GATEWAY_BASE_URL || DEV_GATEWAY_PROXY_PATH;
+  const baseUrlRaw =
+    (config.gatewayBaseUrl ?? "").trim() ||
+    (config.modelProvider === "managed-gateway" ? managedFallbackBaseUrl : "");
+  const baseUrl = normalizeGatewayBaseUrl(baseUrlRaw);
   if (!baseUrl) {
     return null;
   }
@@ -1928,6 +1932,17 @@ export function createWebResonantiaClient(): ResonantiaClient {
         .filter((node) => !sessionFilter || node.sessionId === sessionFilter)
         .sort(byTimestampDesc);
 
+      // Web demo mode is localStorage-first: return cached nodes immediately.
+      if (cachedNodes.length > 0) {
+        const scoped = cachedNodes.slice(0, cappedLimit);
+        return {
+          nodes: scoped,
+          retrieved: scoped.length,
+          source: "fallback-cache",
+          transport: transportLabel(),
+        };
+      }
+
       let db: Surreal | null = null;
       let localNodes: NodeDto[] = [];
       let localError: unknown = null;
@@ -2041,7 +2056,8 @@ export function createWebResonantiaClient(): ResonantiaClient {
       }
 
       const node = normalizeNode(parsed.node);
-      const existing = (await readAllNodes(db)).find((entry) => entry.syncKey === node.syncKey);
+      const cachedNodes = readNodesCacheFromLocalStorage().map(normalizeNode);
+      const existing = cachedNodes.find((entry) => entry.syncKey === node.syncKey);
       if (existing) {
         writeNodesCacheToLocalStorage(mergeNodesBySyncKey(readNodesCacheFromLocalStorage(), [existing]));
         return {
@@ -2054,7 +2070,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
         };
       }
 
-      await upsertLocalNode(db, node);
+      await upsertLocalNode(db, node).catch(() => undefined);
       writeNodesCacheToLocalStorage(mergeNodesBySyncKey(readNodesCacheFromLocalStorage(), [node]));
 
       return {
@@ -2166,7 +2182,15 @@ export function createWebResonantiaClient(): ResonantiaClient {
       const config = await readConfig(db);
 
       const sessionFilter = request.sessionId?.trim();
-      const gatewayBaseUrl = normalizeGatewayBaseUrl(request.gatewayBaseUrl?.trim() || config.gatewayBaseUrl || "");
+      const cachedNodesForSync = readNodesCacheFromLocalStorage()
+        .filter((node) => !sessionFilter || node.sessionId === sessionFilter)
+        .map(normalizeNode);
+      const managedFallbackBaseUrl = DEFAULT_GATEWAY_BASE_URL || DEV_GATEWAY_PROXY_PATH;
+      const gatewayBaseUrlRaw =
+        request.gatewayBaseUrl?.trim() ||
+        config.gatewayBaseUrl ||
+        (config.modelProvider === "managed-gateway" ? managedFallbackBaseUrl : "");
+      const gatewayBaseUrl = normalizeGatewayBaseUrl(gatewayBaseUrlRaw);
       const gatewayAuthToken = normalizeGatewayAuthToken(
         request.gatewayAuthToken?.trim() || config.gatewayAuthToken || "",
       );
@@ -2175,15 +2199,24 @@ export function createWebResonantiaClient(): ResonantiaClient {
         throw new Error("cloud sync path not set. open settings -> advanced sync once, then sync is one-click.");
       }
 
-      let localNodes: NodeDto[] = [];
+      // localStorage is canonical for web demo mode; DB is a best-effort mirror.
+      let localNodes: NodeDto[] = [...cachedNodesForSync];
       try {
-        localNodes = await readAllNodes(db);
-      } catch {
-        const cachedNodes = readNodesCacheFromLocalStorage();
-        if (cachedNodes.length > 0) {
-          localNodes = cachedNodes;
-          await hydrateLocalCacheFromRemote(db, cachedNodes);
+        const dbNodes = await readAllNodes(db);
+        if (dbNodes.length > 0) {
+          localNodes = mergeNodesBySyncKey(localNodes, dbNodes);
         }
+      } catch {
+        if (localNodes.length > 0) {
+          await hydrateLocalCacheFromRemote(db, cachedNodesForSync);
+        }
+      }
+
+      // In mem mode, browser refresh can yield an empty local DB while valid cache exists.
+      // Seed sync from cache to avoid wiping user-visible history on an empty remote read.
+      if (localNodes.length === 0 && cachedNodesForSync.length > 0) {
+        localNodes = [...cachedNodesForSync];
+        await hydrateLocalCacheFromRemote(db, cachedNodesForSync);
       }
 
       const scopedLocalNodes = sessionFilter
