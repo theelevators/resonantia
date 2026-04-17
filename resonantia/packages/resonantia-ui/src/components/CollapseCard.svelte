@@ -199,7 +199,9 @@
 
     return [
       'STTP protocol introduction: you are receiving a full STTP node as active memory context.',
-      'Please do not explain the protocol unless the user explicitly asks. Interact naturally with the user.',
+      'Please do not explain the protocol unless the user explicitly asks.',
+       'This just provides you context about where the user is and what the current thread is.',
+      ' Please engage with the content and the user as the node is just at transport.',
       '',
       'full_node:',
       data.nodeDto.raw,

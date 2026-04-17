@@ -14,6 +14,7 @@
   import AlkahestPanel from './components/AlkahestPanel.svelte';
   import { getCloudAuthStatus, getGatewayAuthToken, signOutCloud, redirectToCloudSignIn, getCloudAccount } from './cloudAuth';
   import { getGatewayBaseUrl as getManagedGatewayBaseUrl } from './config';
+  import type { WalkthroughMode, WalkthroughPhase } from './walkthrough';
   import { resonantiaClient } from './resonantiaClient';
   import type {
     AiSummary,
@@ -114,8 +115,7 @@
   let renameSessionError: string | null = null;
   let renameSessionLoading = false;
 
-  type WalkthroughMode = 'first-run' | 'demo';
-  type WalkthroughStep = 'intro' | 'settings' | 'checkin' | 'telescope' | 'importare' | 'live' | 'complete';
+  type WalkthroughStep = WalkthroughPhase;
 
   let walkthroughMode: WalkthroughMode = 'first-run';
   let walkthroughStep: WalkthroughStep = 'intro';
@@ -606,6 +606,8 @@
         return '[data-tour-target="checkin"]';
       case 'telescope':
         return '[data-tour-target="telescope"]';
+      case 'alkahest':
+        return '[data-tour-target="alkahest"]';
       case 'importare':
         return '[data-tour-target="compose-importare"]';
       case 'live':
@@ -626,6 +628,8 @@
         return ['[data-tour-target="checkin"]', '[data-tour-target="menu-toggle"]'];
       case 'telescope':
         return ['[data-tour-target="telescope"]'];
+      case 'alkahest':
+        return ['[data-tour-target="alkahest"]'];
       case 'importare':
         return ['[data-tour-target="compose-importare"]', '[data-tour-target="compose-toggle"]'];
       case 'live':
@@ -790,11 +794,21 @@
         });
         break;
       case 'telescope':
-        queueWalkthroughAdvance('importare', {
+        queueWalkthroughAdvance('alkahest', {
           holdMs: 220,
           cueDelayMs: 260,
           before: () => {
             closeTelescope();
+            menuOpen = false;
+          },
+        });
+        break;
+      case 'alkahest':
+        queueWalkthroughAdvance('importare', {
+          holdMs: 220,
+          cueDelayMs: 260,
+          before: () => {
+            closeAlkahestPanel();
             menuOpen = false;
           },
         });
@@ -3151,6 +3165,9 @@
   $: if (!telescopeCanAccess && telescopeCameraEngaged && telescopePhase !== 'exiting') {
     beginTelescopeExitTransition();
   }
+  $: if (onboardingOpen && walkthroughStep !== 'alkahest' && alkahestCameraEngaged && alkahestPhase !== 'exiting') {
+    beginAlkahestExitTransition();
+  }
   $: if (level > 1 && alkahestCameraEngaged && alkahestPhase !== 'exiting') {
     beginAlkahestExitTransition();
   }
@@ -3534,6 +3551,7 @@
     }
 
     noteInteraction();
+    markWalkthroughStepSatisfied('alkahest');
     closeTransientUi();
     composeModeMenuOpen = false;
     syncDetailAutoOpen = false;

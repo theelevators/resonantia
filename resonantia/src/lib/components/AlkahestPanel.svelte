@@ -202,7 +202,7 @@
 </script>
 
 <div class="alkahest-shell" class:hidden={hidden || cameraEngaged}>
-  <button class="alkahest-launcher" on:click={toggleOpen} aria-label="open alkahest lab">
+  <button class="alkahest-launcher" data-tour-target="alkahest" on:click={toggleOpen} aria-label="open alkahest lab">
     <AlkahestStone size={28} glow="soft" animated={false} />
   </button>
 </div>

@@ -1,8 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy } from 'svelte';
-
-  type WalkthroughPhase = 'intro' | 'settings' | 'checkin' | 'telescope' | 'importare' | 'live' | 'complete';
-  type WalkthroughMode = 'first-run' | 'demo';
+  import type { WalkthroughMode, WalkthroughPhase } from '../walkthrough';
 
   type StepMeta = {
     title: string;
@@ -21,6 +19,7 @@
     'settings',
     'checkin',
     'telescope',
+    'alkahest',
     'importare',
     'live',
   ];
@@ -40,6 +39,11 @@
       title: 'scan with telescope',
       summary: 'Use the scope to inspect timeline ranges and session context.',
       detail: 'Open telescope, explore briefly, then press Next.',
+    },
+    alkahest: {
+      title: 'open alkahest lab',
+      summary: 'Enter the memory refinery to prep distillation and bundle workflows.',
+      detail: 'Launch Alkahest, let the chamber open, then press Next.',
     },
     importare: {
       title: 'open importare',
@@ -357,7 +361,7 @@
     {:else}
       <section class="cinematic-guide-card" class:visible={cueVisible} data-tour-allow>
         <p class="coach-kicker">{firstRun ? 'guided first run' : 'demo walkthrough'}</p>
-        <div class="coach-progress" aria-hidden="true">
+        <div class="coach-progress" style={`grid-template-columns: repeat(${phaseOrder.length}, minmax(0, 1fr));`} aria-hidden="true">
           {#each phaseOrder as _, idx}
             <span class:active={idx === stepProgressIndex} class:done={idx < stepProgressIndex}></span>
           {/each}
@@ -387,7 +391,7 @@
   .cinematic-layer {
     position: absolute;
     inset: 0;
-    z-index: 28;
+    z-index: 220;
     pointer-events: none;
   }
 
@@ -503,7 +507,6 @@
 
   .coach-progress {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 4px;
     margin-bottom: 8px;
   }
