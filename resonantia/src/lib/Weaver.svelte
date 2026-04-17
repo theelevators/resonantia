@@ -805,7 +805,7 @@
           cueDelayMs: 260,
           before: () => {
             composeModeMenuOpen = false;
-            composeOpen = false;
+            closeComposeDrawer();
           },
         });
         break;
@@ -815,7 +815,7 @@
           cueDelayMs: 0,
           before: () => {
             composeModeMenuOpen = false;
-            composeOpen = false;
+            closeComposeDrawer();
             closeTelescope();
             menuOpen = false;
           },
@@ -1365,7 +1365,7 @@
 
   function closeTransientUi() {
     menuOpen = false;
-    composeOpen = false;
+    closeComposeDrawer();
     calibrateOpen = false;
     settingsOpen = false;
 
@@ -2611,6 +2611,44 @@
     content: string;
     at: string;
   };
+  type ComposeContextSession = {
+    sessionId: string;
+    label: string;
+  };
+  type ComposeContextNodeItem = {
+    key: string;
+    sessionId: string;
+    title: string;
+    timestamp: string;
+    tier: string;
+    psi: number;
+    preview: string;
+    raw: string;
+  };
+  type ComposeTabState = {
+    id: string;
+    title: string;
+    sessionId: string;
+    originSessionId: string;
+    draft: string;
+    messages: ComposeMessage[];
+    contextSessions: ComposeContextSession[];
+    browseSessionId: string;
+    injectedNodes: ComposeContextNodeItem[];
+  };
+  type ContinueInAppPayload = {
+    sessionId: string;
+    prompt: string;
+    sourceNodeRaw: string;
+    threadCandidates: ComposeContextSession[];
+  };
+  const COMPOSE_MAX_TABS = 3;
+  const COMPOSE_RECENT_CONTEXT_SESSION_LIMIT = 5;
+  const COMPOSE_CONTEXT_NODE_FETCH_LIMIT = 240;
+  const COMPOSE_PROTOCOL_INTRO = [
+    'STTP protocol introduction: the following full STTP nodes are active memory context for this chat.',
+    'Please gently avoid explaining the protocol unless the user explicitly asks, and otherwise interact directly with the user.',
+  ].join('\n');
   let composeMessages: ComposeMessage[] = [];
   let composeSessionId = '';
   let composeLoading  = false;
@@ -2625,6 +2663,17 @@
   let composePasteNodeOpen = false;
   let composePasteNodeDraft = '';
   let composePasteNodeLoading = false;
+  let composeTabs: ComposeTabState[] = [];
+  let composeActiveTabId = '';
+  let composeContextSessions: ComposeContextSession[] = [];
+  let composeContextOriginSessionId = '';
+  let composeContextBrowseSessionId = '';
+  let composeContextNodes: ComposeContextNodeItem[] = [];
+  let composeContextNodesCache: Record<string, ComposeContextNodeItem[]> = {};
+  let composeContextNodesLoading = false;
+  let composeContextNodesError: string | null = null;
+  let composeInjectedNodes: ComposeContextNodeItem[] = [];
+  let composeLiveUiProps: Record<string, unknown> = {};
   let syncPullLoading = false;
   let syncPullError: string | null = null;
   let syncPullResult: SyncNowResponse | null = null;
@@ -2638,6 +2687,31 @@
   let syncDetailTimeLabel = 'never';
   let syncDetailTimestamp: Date | null = null;
   let syncDetailTimer: ReturnType<typeof setTimeout> | null = null;
+
+  $: composeLiveUiProps = {
+    tabs: composeTabs.map((tab) => ({ id: tab.id, title: tab.title, sessionId: tab.sessionId })),
+    activeTabId: composeActiveTabId,
+    maxTabs: COMPOSE_MAX_TABS,
+    contextSessions: composeContextSessions,
+    contextOriginSessionId: composeContextOriginSessionId,
+    contextBrowseSessionId: composeContextBrowseSessionId,
+    contextNodes: composeContextNodes,
+    contextNodesLoading: composeContextNodesLoading,
+    contextNodesError: composeContextNodesError,
+    injectedNodes: composeInjectedNodes.map((node) => ({
+      key: node.key,
+      title: node.title,
+      sessionId: node.sessionId,
+      timestamp: node.timestamp,
+    })),
+    onDraftInput: handleComposeDraftInput,
+    selectComposeTab: selectComposeLiveTab,
+    createComposeTab: createComposeLiveTab,
+    closeComposeTab: closeComposeLiveTab,
+    selectContextSession: selectComposeContextSession,
+    injectContextNode: injectComposeContextNode,
+    removeInjectedNode: removeComposeInjectedNode,
+  };
 
   type TelescopeRange = {
     label: string;
@@ -3807,12 +3881,437 @@
     }, 1)}); box-shadow: 0 0 18px ${avecColor(avec, 0.24)};`;
   }
 
+  function composeSessionLabel(sessionId: string) {
+    const normalized = sessionId.trim();
+    if (!normalized) {
+      return '';
+    }
+
+    const graphLabel = graph?.sessions.find((session) => session.id === sessionKey(normalized))?.label ?? '';
+    const base = (graphLabel || normalized).trim();
+    return base.replace(/_/g, ' ');
+  }
+
+  function composeNodePreview(rawNode: string) {
+    const normalized = rawNode.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      return '(empty node)';
+    }
+
+    return normalized.length > 210 ? `${normalized.slice(0, 210)}...` : normalized;
+  }
+
+  function normalizeComposeContextSessions(candidates: ComposeContextSession[]) {
+    const bySessionId = new Map<string, ComposeContextSession>();
+
+    for (const candidate of candidates) {
+      const sessionId = candidate.sessionId.trim();
+      if (!sessionId) {
+        continue;
+      }
+
+      const existing = bySessionId.get(sessionId);
+      if (existing) {
+        continue;
+      }
+
+      bySessionId.set(sessionId, {
+        sessionId,
+        label: (candidate.label.trim() || composeSessionLabel(sessionId) || sessionId).replace(/_/g, ' '),
+      });
+    }
+
+    return [...bySessionId.values()];
+  }
+
+  function buildComposeTabId() {
+    return `compose-${Date.now()}-${Math.round(Math.random() * 1_000_000).toString(36)}`;
+  }
+
+  function buildComposeTabTitle(sessionId: string, fallbackIndex: number) {
+    const label = composeSessionLabel(sessionId);
+    return label || `thread ${fallbackIndex + 1}`;
+  }
+
+  function composeRecentTimelineContextSessions(limit = COMPOSE_RECENT_CONTEXT_SESSION_LIMIT): ComposeContextSession[] {
+    if (!graph) {
+      return [];
+    }
+
+    return graph.sessions
+      .slice()
+      .sort((left, right) => right.lastModified.localeCompare(left.lastModified))
+      .map((session) => {
+        const sessionId = canonicalSessionId(session).trim();
+        return {
+          sessionId,
+          label: composeSessionLabel(sessionId) || sessionId,
+        };
+      })
+      .filter((candidate) => Boolean(candidate.sessionId))
+      .slice(0, limit);
+  }
+
+  function buildDefaultComposeTabState(
+    seedSessionId: string,
+    options: { includeRecentContext?: boolean } = {},
+  ): ComposeTabState {
+    const normalizedSession = seedSessionId.trim();
+    const includeRecentContext = options.includeRecentContext === true;
+    const seedContextSessions = normalizedSession
+      ? [
+        {
+          sessionId: normalizedSession,
+          label: composeSessionLabel(normalizedSession) || normalizedSession,
+        },
+      ]
+      : [];
+    const contextSessions = includeRecentContext
+      ? normalizeComposeContextSessions([
+        ...seedContextSessions,
+        ...composeRecentTimelineContextSessions(),
+      ])
+      : seedContextSessions;
+
+    return {
+      id: buildComposeTabId(),
+      title: buildComposeTabTitle(normalizedSession, composeTabs.length),
+      sessionId: normalizedSession,
+      originSessionId: normalizedSession,
+      draft: '',
+      messages: [],
+      contextSessions,
+      browseSessionId: '',
+      injectedNodes: [],
+    };
+  }
+
+  function snapshotActiveComposeTab() {
+    if (composeMode !== 'live' || !composeActiveTabId) {
+      return;
+    }
+
+    const activeIndex = composeTabs.findIndex((tab) => tab.id === composeActiveTabId);
+    if (activeIndex < 0) {
+      return;
+    }
+
+    const current = composeTabs[activeIndex];
+    const normalizedSession = composeSessionId.trim();
+    const nextTitle = composeSessionLabel(normalizedSession) || current.title || buildComposeTabTitle(normalizedSession, activeIndex);
+
+    const snapshot: ComposeTabState = {
+      ...current,
+      title: nextTitle,
+      sessionId: normalizedSession,
+      originSessionId: composeContextOriginSessionId,
+      draft: composeDraft,
+      messages: [...composeMessages],
+      contextSessions: [...composeContextSessions],
+      browseSessionId: composeContextBrowseSessionId,
+      injectedNodes: [...composeInjectedNodes],
+    };
+
+    composeTabs = [
+      ...composeTabs.slice(0, activeIndex),
+      snapshot,
+      ...composeTabs.slice(activeIndex + 1),
+    ];
+  }
+
+  function configureComposeContextSessions(
+    candidates: ComposeContextSession[],
+    preferredSessionId = '',
+    autoSelectPreferred = false,
+  ) {
+    composeContextSessions = normalizeComposeContextSessions(candidates);
+
+    if (composeContextSessions.length === 0) {
+      composeContextBrowseSessionId = '';
+      composeContextNodes = [];
+      return;
+    }
+
+    const preferred = preferredSessionId.trim();
+    if (
+      autoSelectPreferred
+      && preferred
+      && composeContextSessions.some((candidate) => candidate.sessionId === preferred)
+    ) {
+      composeContextBrowseSessionId = preferred;
+      return;
+    }
+
+    if (composeContextSessions.some((candidate) => candidate.sessionId === composeContextBrowseSessionId)) {
+      return;
+    }
+
+    composeContextBrowseSessionId = '';
+    composeContextNodes = [];
+  }
+
+  function ensureComposeContextSession(sessionId: string) {
+    const normalized = sessionId.trim();
+    if (!normalized) {
+      return;
+    }
+
+    if (composeContextSessions.some((candidate) => candidate.sessionId === normalized)) {
+      return;
+    }
+
+    configureComposeContextSessions(
+      [
+        ...composeContextSessions,
+        {
+          sessionId: normalized,
+          label: composeSessionLabel(normalized) || normalized,
+        },
+      ],
+      composeContextBrowseSessionId,
+      Boolean(composeContextBrowseSessionId),
+    );
+  }
+
+  async function loadComposeContextNodes(sessionId: string) {
+    const normalized = sessionId.trim();
+    if (!normalized) {
+      composeContextNodes = [];
+      composeContextNodesError = null;
+      return;
+    }
+
+    const cached = composeContextNodesCache[normalized];
+    if (cached) {
+      composeContextNodes = cached;
+      composeContextNodesError = null;
+      return;
+    }
+
+    composeContextNodesLoading = true;
+    composeContextNodesError = null;
+
+    try {
+      const listed = await resonantiaClient.listNodes(COMPOSE_CONTEXT_NODE_FETCH_LIMIT, normalized);
+      if (listed.transport) {
+        lastTransportLabel = listed.transport;
+      }
+      applySourceBadge(listed.source, listed.transport ?? lastTransportLabel);
+
+      const mapped = listed.nodes
+        .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
+        .map((node) => ({
+          key: `${node.sessionId}|${node.syntheticId}|${node.syncKey}|${node.timestamp}`,
+          sessionId: node.sessionId,
+          title: `${node.tier} · Ψ ${node.psi.toFixed(2)}`,
+          timestamp: node.timestamp,
+          tier: node.tier,
+          psi: node.psi,
+          preview: composeNodePreview(node.raw),
+          raw: node.raw,
+        }));
+
+      composeContextNodesCache = {
+        ...composeContextNodesCache,
+        [normalized]: mapped,
+      };
+      composeContextNodes = mapped;
+    } catch (err) {
+      composeContextNodes = [];
+      composeContextNodesError = String(err);
+    } finally {
+      composeContextNodesLoading = false;
+    }
+  }
+
+  function selectComposeContextSession(sessionId: string) {
+    const normalized = sessionId.trim();
+    if (!normalized) {
+      return;
+    }
+
+    composeContextBrowseSessionId = normalized;
+    void loadComposeContextNodes(normalized);
+    snapshotActiveComposeTab();
+  }
+
+  function injectComposeContextNode(nodeKey: string) {
+    const selected = composeContextNodes.find((node) => node.key === nodeKey);
+    if (!selected) {
+      return;
+    }
+
+    if (composeInjectedNodes.some((node) => node.key === selected.key)) {
+      return;
+    }
+
+    composeInjectedNodes = [...composeInjectedNodes, selected];
+    composeContextNodesError = null;
+    snapshotActiveComposeTab();
+  }
+
+  function removeComposeInjectedNode(nodeKey: string) {
+    composeInjectedNodes = composeInjectedNodes.filter((node) => node.key !== nodeKey);
+    snapshotActiveComposeTab();
+  }
+
+  function seedComposeInjectedNode(sessionId: string, rawNode: string) {
+    const normalizedSession = sessionId.trim();
+    const normalizedRaw = rawNode.trim();
+    if (!normalizedSession || !normalizedRaw) {
+      return;
+    }
+
+    const key = `${normalizedSession}:${normalizedRaw.length}:${Math.round(hashUnit(`${normalizedSession}:${normalizedRaw}`) * 1_000_000_000)}`;
+    if (composeInjectedNodes.some((node) => node.key === key)) {
+      return;
+    }
+
+    composeInjectedNodes = [
+      ...composeInjectedNodes,
+      {
+        key,
+        sessionId: normalizedSession,
+        title: composeSessionLabel(normalizedSession) || normalizedSession,
+        timestamp: new Date().toISOString(),
+        tier: 'raw',
+        psi: 0,
+        preview: composeNodePreview(normalizedRaw),
+        raw: normalizedRaw,
+      },
+    ];
+  }
+
+  function loadComposeTab(tabId: string) {
+    const tab = composeTabs.find((entry) => entry.id === tabId);
+    if (!tab) {
+      return;
+    }
+
+    composeActiveTabId = tab.id;
+    composeSessionId = tab.sessionId;
+    composeContextOriginSessionId = tab.originSessionId || tab.sessionId;
+    composeDraft = tab.draft;
+    composeMessages = [...tab.messages];
+    configureComposeContextSessions(tab.contextSessions, tab.browseSessionId, Boolean(tab.browseSessionId));
+    composeInjectedNodes = [...tab.injectedNodes];
+    composeContextNodesError = null;
+    composeContextNodes = [];
+
+    if (composeContextBrowseSessionId) {
+      void loadComposeContextNodes(composeContextBrowseSessionId);
+    }
+  }
+
+  function ensureComposeLiveTab() {
+    if (composeTabs.length === 0) {
+      const seeded = buildDefaultComposeTabState(canonicalSessionId(selectedSession), {
+        includeRecentContext: true,
+      });
+      composeTabs = [seeded];
+      loadComposeTab(seeded.id);
+      return;
+    }
+
+    if (!composeActiveTabId || !composeTabs.some((tab) => tab.id === composeActiveTabId)) {
+      loadComposeTab(composeTabs[0].id);
+      return;
+    }
+
+    loadComposeTab(composeActiveTabId);
+  }
+
+  function createComposeLiveTab() {
+    if (composeTabs.length >= COMPOSE_MAX_TABS) {
+      composeContextNodesError = `up to ${COMPOSE_MAX_TABS} live threads are available`;
+      return;
+    }
+
+    snapshotActiveComposeTab();
+    const seedSession = composeSessionId.trim() || canonicalSessionId(selectedSession);
+    const nextTab = buildDefaultComposeTabState(seedSession);
+    composeTabs = [...composeTabs, nextTab];
+    composeContextNodesError = null;
+    loadComposeTab(nextTab.id);
+  }
+
+  function selectComposeLiveTab(tabId: string) {
+    if (!tabId || tabId === composeActiveTabId) {
+      return;
+    }
+
+    snapshotActiveComposeTab();
+    loadComposeTab(tabId);
+  }
+
+  function closeComposeLiveTab(tabId: string) {
+    if (composeTabs.length <= 1) {
+      return;
+    }
+
+    snapshotActiveComposeTab();
+    const closeIndex = composeTabs.findIndex((tab) => tab.id === tabId);
+    if (closeIndex < 0) {
+      return;
+    }
+
+    const wasActive = composeActiveTabId === tabId;
+    const nextTabs = composeTabs.filter((tab) => tab.id !== tabId);
+    composeTabs = nextTabs;
+
+    if (wasActive) {
+      const fallbackIndex = Math.max(0, closeIndex - 1);
+      const fallback = nextTabs[fallbackIndex] ?? nextTabs[0];
+      if (fallback) {
+        loadComposeTab(fallback.id);
+      }
+      return;
+    }
+
+    if (!nextTabs.some((tab) => tab.id === composeActiveTabId) && nextTabs[0]) {
+      loadComposeTab(nextTabs[0].id);
+    }
+  }
+
+  function closeComposeDrawer() {
+    snapshotActiveComposeTab();
+    composeOpen = false;
+  }
+
+  function handleComposeDraftInput() {
+    snapshotActiveComposeTab();
+  }
+
+  function buildComposeInjectedContextSystemMessage(): ChatMessage | null {
+    if (composeInjectedNodes.length === 0) {
+      return null;
+    }
+
+    const blocks: string[] = [];
+    for (const node of composeInjectedNodes) {
+      blocks.push(
+        `context_session_id: ${node.sessionId}`,
+        'full_node:',
+        node.raw,
+        '',
+      );
+    }
+
+    return {
+      role: 'system',
+      content: [COMPOSE_PROTOCOL_INTRO, '', ...blocks].join('\n'),
+    };
+  }
+
   function openCompose(mode: 'live' | 'importare' = 'live') {
+    snapshotActiveComposeTab();
     composeModeMenuOpen = false;
     composeMode = mode;
-    composeSessionId = canonicalSessionId(selectedSession);
-    composeDraft = '';
-    composeMessages = [];
+
+    if (mode === 'live') {
+      ensureComposeLiveTab();
+    }
+
     composeError = null;
     composeResult = null;
     composeLoading = false;
@@ -3822,45 +4321,84 @@
     clearComposePromptCopiedTimer();
     composePromptCopied = false;
     composePromptCopyError = null;
+    composeContextNodesError = null;
     composePasteNodeOpen = mode === 'importare';
     composePasteNodeDraft = '';
     composePasteNodeLoading = false;
     composeOpen = true;
+
+    if (mode === 'live' && composeContextBrowseSessionId) {
+      void loadComposeContextNodes(composeContextBrowseSessionId);
+    }
   }
 
-  function continueThreadInCompose(event: CustomEvent<{ sessionId: string; prompt: string }>) {
+  function continueThreadInCompose(event: CustomEvent<ContinueInAppPayload>) {
     const sessionId = event.detail.sessionId.trim();
     const prompt = event.detail.prompt.trim();
-    if (!sessionId || !prompt) {
+    const sourceNodeRaw = event.detail.sourceNodeRaw.trim();
+    const incomingSessions = normalizeComposeContextSessions(event.detail.threadCandidates ?? []);
+
+    if (!sessionId || !prompt || !sourceNodeRaw) {
       return;
     }
 
     closeCard();
+    snapshotActiveComposeTab();
+
+    let targetTabId = composeTabs.find((tab) => tab.sessionId === sessionId)?.id ?? '';
+    if (!targetTabId && composeTabs.length < COMPOSE_MAX_TABS) {
+      const nextTab = buildDefaultComposeTabState(sessionId);
+      composeTabs = [...composeTabs, nextTab];
+      targetTabId = nextTab.id;
+    }
+    if (!targetTabId) {
+      targetTabId = composeActiveTabId || composeTabs[0]?.id || '';
+    }
+    if (!targetTabId) {
+      return;
+    }
 
     composeModeMenuOpen = false;
     composeMode = 'live';
-    composeSessionId = sessionId;
-    composeDraft = '';
-    composeMessages = [
-      {
-        role: 'user',
-        content: prompt,
-        at: new Date().toISOString(),
-      },
-    ];
     composeError = null;
     composeResult = null;
     composeLoading = false;
-    composeReplyLoading = false;
     composeEncodePromptSent = false;
     composePromptCopyLoading = false;
     clearComposePromptCopiedTimer();
     composePromptCopied = false;
     composePromptCopyError = null;
+
+    loadComposeTab(targetTabId);
+    composeSessionId = sessionId;
+    composeContextOriginSessionId = sessionId;
+    configureComposeContextSessions(
+      [
+        ...composeContextSessions,
+        {
+          sessionId,
+          label: composeSessionLabel(sessionId) || sessionId,
+        },
+        ...incomingSessions,
+      ],
+      '',
+      false,
+    );
+    composeContextBrowseSessionId = '';
+    composeContextNodes = [];
+    seedComposeInjectedNode(sessionId, sourceNodeRaw);
+
+    if (composeContextBrowseSessionId) {
+      void loadComposeContextNodes(composeContextBrowseSessionId);
+    }
+
     composePasteNodeOpen = false;
     composePasteNodeDraft = '';
     composePasteNodeLoading = false;
     composeOpen = true;
+    snapshotActiveComposeTab();
+
+    void sendComposeMessage(prompt);
   }
 
   function toggleComposeModeMenu() {
@@ -3884,6 +4422,20 @@
     composeMode = 'live';
     composePasteNodeOpen = false;
     composePasteNodeDraft = '';
+    ensureComposeLiveTab();
+
+    if (composeContextBrowseSessionId) {
+      void loadComposeContextNodes(composeContextBrowseSessionId);
+    }
+  }
+
+  function handleComposeSessionInput() {
+    if (composeError && /session id is required/i.test(composeError) && composeSessionId.trim()) {
+      composeError = null;
+    }
+
+    ensureComposeContextSession(composeSessionId);
+    snapshotActiveComposeTab();
   }
 
   function clearComposeConversation() {
@@ -3895,8 +4447,10 @@
     clearComposePromptCopiedTimer();
     composePromptCopied = false;
     composePromptCopyError = null;
+    composeContextNodesError = null;
     composePasteNodeOpen = false;
     composePasteNodeDraft = '';
+    snapshotActiveComposeTab();
   }
 
   function clearComposePromptCopiedTimer() {
@@ -3993,12 +4547,17 @@
       if (composeError && /session id is required/i.test(composeError)) {
         composeError = null;
       }
+      ensureComposeContextSession(parsedSessionId);
+      snapshotActiveComposeTab();
     }
   }
 
-  async function sendComposeMessage() {
-    const text = composeDraft.trim();
+  async function sendComposeMessage(seedText?: string) {
+    const text = (seedText ?? composeDraft).trim();
     if (!text || composeReplyLoading || composeLoading) {
+      if (seedText?.trim() && composeReplyLoading) {
+        composeError = 'wait for the current response before injecting another message';
+      }
       return;
     }
 
@@ -4010,6 +4569,8 @@
 
     composeError = null;
     composeResult = null;
+    composeContextNodesError = null;
+    ensureComposeContextSession(sessionId);
 
     const nextMessages: ComposeMessage[] = [
       ...composeMessages,
@@ -4021,14 +4582,22 @@
     ];
 
     composeMessages = nextMessages;
-    composeDraft = '';
+    if (!seedText) {
+      composeDraft = '';
+    }
     composeReplyLoading = true;
 
     try {
+      const systemContext = buildComposeInjectedContextSystemMessage();
+      const outboundMessages = composeApiMessages(nextMessages);
+      if (systemContext) {
+        outboundMessages.unshift(systemContext);
+      }
+
       const reply = await runManagedAiWithTokenRetry(() =>
         resonantiaClient.chatCompose({
           sessionId,
-          messages: composeApiMessages(nextMessages),
+          messages: outboundMessages,
         })
       );
 
@@ -4042,10 +4611,12 @@
           },
         ];
       }
+      snapshotActiveComposeTab();
     } catch (err) {
       composeError = String(err);
     } finally {
       composeReplyLoading = false;
+      snapshotActiveComposeTab();
     }
   }
 
@@ -4085,6 +4656,7 @@
 
       composePasteNodeDraft = '';
       composePasteNodeOpen = false;
+      snapshotActiveComposeTab();
       await loadGraph();
     } catch (err) {
       composeError = String(err);
@@ -4220,9 +4792,14 @@
       };
       composeDraft = '';
       composeMessages = [];
+      snapshotActiveComposeTab();
       await loadGraph();
     } catch (err) { composeError = String(err); }
-    finally      { composeLoading = false; composeEncodePromptSent = false; }
+    finally      {
+      composeLoading = false;
+      composeEncodePromptSent = false;
+      snapshotActiveComposeTab();
+    }
   }
 
   // ── Calibrate ───────────────────────────────────────────────
@@ -4848,6 +5425,7 @@
   {/if}
 
   <ComposeDrawer
+    {...composeLiveUiProps}
     open={composeOpen}
     mode={composeMode}
     bind:sessionId={composeSessionId}
@@ -4864,12 +5442,8 @@
     pasteNodeOpen={composePasteNodeOpen}
     bind:pasteNodeDraft={composePasteNodeDraft}
     pasteNodeLoading={composePasteNodeLoading}
-    onClose={() => (composeOpen = false)}
-    onSessionInput={() => {
-      if (composeError && /session id is required/i.test(composeError) && composeSessionId.trim()) {
-        composeError = null;
-      }
-    }}
+    onClose={closeComposeDrawer}
+    onSessionInput={handleComposeSessionInput}
     sendComposeMessage={sendComposeMessage}
     copyComposeEncodePrompt={copyComposeEncodePrompt}
     toggleComposePasteNode={toggleComposePasteNode}

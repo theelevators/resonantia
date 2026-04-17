@@ -21,7 +21,12 @@
     close: void;
     navigate: { sessionId: string };
     transmute: void;
-    continueInApp: { sessionId: string; prompt: string };
+    continueInApp: {
+      sessionId: string;
+      prompt: string;
+      sourceNodeRaw: string;
+      threadCandidates: Array<{ sessionId: string; label: string }>;
+    };
   }>();
 
   $: avec = data?.nodeDto?.userAvec ?? null;
@@ -180,56 +185,23 @@
     throw new Error('Clipboard is not available in this context.');
   }
 
-  function compactNodePreview(rawNode: string) {
-    const normalized = rawNode.replace(/\s+/g, ' ').trim();
-    if (!normalized) {
+  function canonicalSessionId(value: string) {
+    const source = value.trim();
+    if (!source) {
       return '';
     }
 
-    return normalized.length > 420 ? `${normalized.slice(0, 420)}...` : normalized;
+    return source.startsWith('s:') ? source.slice(2) : source;
   }
 
   function buildContextPrimePrompt() {
     if (!data?.node || !data.nodeDto) return '';
 
-    const related = data.relatedSessions
-      .slice(0, 4)
-      .map((session) => session.label)
-      .join(', ');
-    const summaryLines = summary
-      ? [
-          summary.topic ? `- topic: ${summary.topic}` : null,
-          summary.whatHappened ? `- what happened: ${summary.whatHappened}` : null,
-          summary.whereWeLeftOff ? `- where we left off: ${summary.whereWeLeftOff}` : null,
-          summary.pickBackUpWith ? `- pick back up with: ${summary.pickBackUpWith}` : null,
-        ].filter((line): line is string => Boolean(line))
-      : [];
-    const fallbackSummary = summaryLines.length > 0 ? summaryLines.join('\n') : '- summary unavailable';
-    const nodePreview = compactNodePreview(data.nodeDto.raw);
-
     return [
-      'You are receiving a context handoff from Resonantia.',
-      'Treat this as active memory transfer and continue naturally.',
+      'STTP protocol introduction: you are receiving a full STTP node as active memory context.',
+      'Please do not explain the protocol unless the user explicitly asks. Interact naturally with the user.',
       '',
-      'Goals:',
-      '1. continue from this memory without asking to restate everything,',
-      '2. keep tone and trajectory aligned,',
-      '3. propose the best immediate next step.',
-      '',
-      'Handoff packet:',
-      `- session: ${data.nodeDto.sessionId}`,
-      `- tier: ${data.nodeDto.tier}`,
-      `- timestamp: ${data.nodeDto.timestamp}`,
-      `- psi: ${data.nodeDto.psi.toFixed(4)}`,
-      related ? `- nearby threads: ${related}` : '- nearby threads: none',
-      '',
-      'Recent transmutation:',
-      fallbackSummary,
-      '',
-      'Node preview:',
-      nodePreview || '(empty)',
-      '',
-      'Source node (verbatim):',
+      'full_node:',
       data.nodeDto.raw,
     ].join('\n');
   }
@@ -312,14 +284,34 @@
   async function continueInResonantia() {
     const prompt = buildContextPrimePrompt();
     const sessionId = data?.nodeDto?.sessionId?.trim();
-    if (!prompt || !sessionId) return;
+    const sourceNodeRaw = data?.nodeDto?.raw?.trim() ?? '';
+    if (!prompt || !sessionId || !sourceNodeRaw) return;
+
+    const relatedSessions = data?.relatedSessions ?? [];
+
+    const threadCandidates = [
+      {
+        sessionId,
+        label: canonicalSessionId(sessionId).replace(/_/g, ' ') || sessionId,
+      },
+      ...relatedSessions
+        .slice(0, 4)
+        .map((session) => {
+          const candidateSessionId = canonicalSessionId(session.label || session.id);
+          return {
+            sessionId: candidateSessionId,
+            label: canonicalSessionId(session.label || session.id).replace(/_/g, ' ') || candidateSessionId,
+          };
+        })
+        .filter((candidate) => candidate.sessionId && candidate.sessionId !== sessionId),
+    ];
 
     aiBusy = true;
     aiStatus = null;
 
     try {
       await copyText(prompt);
-      dispatch('continueInApp', { sessionId, prompt });
+      dispatch('continueInApp', { sessionId, prompt, sourceNodeRaw, threadCandidates });
       aiStatus = 'thread context copied · continued in resonantia';
       aiMenu = null;
     } catch (err) {
