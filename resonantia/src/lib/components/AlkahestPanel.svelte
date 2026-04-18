@@ -684,6 +684,10 @@
   }
 
   @media (max-width: 760px) {
+    .alkahest-lab {
+      width: min(380px, calc(100vw - 24px));
+    }
+
     .alkahest-shell {
       left: max(4px, calc(var(--safe-left) + 0px));
       bottom: max(58px, calc(var(--safe-bottom) + 48px));
