@@ -48,10 +48,12 @@ const INDEXED_DB_ENDPOINT_CANDIDATES = [
 const MEM_FALLBACK_ENDPOINT = "mem://";
 const INDEXED_DB_OPEN_TIMEOUT_MS = 3000;
 const MEM_DB_OPEN_TIMEOUT_MS = 2500;
+// Web demo mode is localStorage-first and does not initialize Surreal/WASM storage.
 const ENABLE_INDEXEDDB_STORAGE = false;
 const ENABLE_INDEXEDDB_PROMOTION = false;
 const APP_CONFIG_STORAGE_KEY = "resonantia:app-config:v1";
 const NODE_CACHE_STORAGE_KEY = "resonantia:nodes-cache:v1";
+const CALIBRATION_CACHE_STORAGE_KEY = "resonantia:calibration-cache:v1";
 const NODE_CACHE_LIMIT = 1200;
 
 const DEFAULT_GATEWAY_BASE_URL = (import.meta.env.VITE_GATEWAY_BASE_URL ?? '').trim();
@@ -520,6 +522,10 @@ async function recoverIndexedDbStore(endpoint: string, includeSiblingCandidates 
 }
 
 function transportLabel(): string {
+  if (!ENABLE_INDEXEDDB_STORAGE) {
+    return "localstorage cache (web demo mode)";
+  }
+
   const persistence = persistenceStatusLabel();
   const endpoint = indexedDbEndpointLabel(activeIndexedDbEndpoint);
 
@@ -604,6 +610,10 @@ async function ensurePersistentStoragePreference(): Promise<void> {
 }
 
 function localReadSourceLabel(): string {
+  if (!ENABLE_INDEXEDDB_STORAGE) {
+    return "localstorage-cache";
+  }
+
   return storageMode === "mem" ? "surrealdb-mem" : "surrealdb-local";
 }
 
@@ -774,6 +784,97 @@ function writeNodesCacheToLocalStorage(nodes: NodeDto[]): void {
   }
 }
 
+function readCalibrationCacheFromLocalStorage(): Record<string, CalibrationStateRecord> {
+  if (typeof localStorage === "undefined") {
+    return {};
+  }
+
+  const raw = localStorage.getItem(CALIBRATION_CACHE_STORAGE_KEY);
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    const parsed = asRecord(JSON.parse(raw));
+    const cache: Record<string, CalibrationStateRecord> = {};
+
+    for (const [key, value] of Object.entries(parsed)) {
+      const source = asRecord(value);
+      const sessionId = readString(source, "sessionId", "session_id").trim() || key.trim();
+      if (!sessionId) {
+        continue;
+      }
+
+      const historyRaw = source.triggerHistory;
+      cache[sessionId] = {
+        sessionId,
+        currentAvec: normalizeAvec(readObject(source, "currentAvec", "current_avec")),
+        triggerHistory: Array.isArray(historyRaw)
+          ? historyRaw.filter((item): item is string => typeof item === "string")
+          : [],
+        updatedAt: readString(source, "updatedAt", "updated_at") || nowIso(),
+      };
+    }
+
+    return cache;
+  } catch {
+    return {};
+  }
+}
+
+function writeCalibrationCacheToLocalStorage(cache: Record<string, CalibrationStateRecord>): void {
+  if (typeof localStorage === "undefined") {
+    return;
+  }
+
+  try {
+    localStorage.setItem(CALIBRATION_CACHE_STORAGE_KEY, JSON.stringify(cache));
+  } catch {
+    // Ignore quota/privacy failures and keep runtime behavior unchanged.
+  }
+}
+
+function readCalibrationStateFromLocalStorage(sessionId: string): CalibrationStateRecord | null {
+  const key = sessionId.trim();
+  if (!key) {
+    return null;
+  }
+
+  const cache = readCalibrationCacheFromLocalStorage();
+  return cache[key] ?? null;
+}
+
+function upsertCalibrationStateToLocalStorage(record: CalibrationStateRecord): void {
+  const sessionId = record.sessionId.trim();
+  if (!sessionId) {
+    return;
+  }
+
+  const cache = readCalibrationCacheFromLocalStorage();
+  cache[sessionId] = {
+    sessionId,
+    currentAvec: normalizeAvec(record.currentAvec),
+    triggerHistory: [...record.triggerHistory],
+    updatedAt: record.updatedAt || nowIso(),
+  };
+  writeCalibrationCacheToLocalStorage(cache);
+}
+
+function deleteCalibrationStateFromLocalStorage(sessionId: string): void {
+  const key = sessionId.trim();
+  if (!key) {
+    return;
+  }
+
+  const cache = readCalibrationCacheFromLocalStorage();
+  if (!Object.prototype.hasOwnProperty.call(cache, key)) {
+    return;
+  }
+
+  delete cache[key];
+  writeCalibrationCacheToLocalStorage(cache);
+}
+
 function canonicalRawKey(raw: string): string {
   return stableHash(`raw:${raw.trim()}`);
 }
@@ -855,6 +956,14 @@ function defaultConfig(): AppConfig {
 }
 
 async function readConfigBestEffort(): Promise<{ config: AppConfig; db: Surreal | null }> {
+  if (!ENABLE_INDEXEDDB_STORAGE) {
+    const cached = readConfigFromLocalStorage();
+    return {
+      config: cached ?? defaultConfig(),
+      db: null,
+    };
+  }
+
   try {
     const db = await getDb();
     const config = await readConfig(db);
@@ -1098,6 +1207,33 @@ function toSessionGraphId(sessionId: string): string {
   return sessionId.startsWith("s:") ? sessionId : `s:${sessionId}`;
 }
 
+function sessionIdAliases(sessionId: string): string[] {
+  const trimmed = sessionId.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const aliases: string[] = [];
+  const seen = new Set<string>();
+  const append = (value: string) => {
+    const normalized = value.trim();
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    aliases.push(normalized);
+  };
+
+  append(trimmed);
+  if (trimmed.startsWith("s:")) {
+    append(trimmed.slice(2));
+  } else {
+    append(`s:${trimmed}`);
+  }
+
+  return aliases;
+}
+
 function toNodeLabel(node: NodeDto): string {
   const date = node.timestamp.slice(0, 10);
   return `${node.tier} · ${date}`;
@@ -1232,11 +1368,7 @@ function normalizeConfig(input: unknown): AppConfig {
 
 async function connectDb(): Promise<Surreal> {
   if (!ENABLE_INDEXEDDB_STORAGE) {
-    const fallback = await openDbEndpoint(MEM_FALLBACK_ENDPOINT);
-    storageMode = "mem";
-    storageRecovered = false;
-    lastIndexedDbError = null;
-    return fallback;
+    throw new Error("web storage-only mode: surrealdb wasm storage disabled");
   }
 
   await ensurePersistentStoragePreference();
@@ -1255,7 +1387,7 @@ async function connectDb(): Promise<Surreal> {
     } catch (error) {
       lastCandidateError = error;
       lastIndexedDbError = errorToString(error);
-      if (isWasmClosureLifecycleError(error)) {
+      if (isWasmClosureLifecycleError(error) || isIndexedDbOpenTimeoutFailure(error)) {
         break;
       }
     }
@@ -2134,8 +2266,7 @@ async function readCalibrationState(db: Surreal, sessionId: string): Promise<Cal
 export function createWebResonantiaClient(): ResonantiaClient {
   return {
     async getHealth(): Promise<HealthResponse> {
-      const db = await getDb();
-      await readConfig(db);
+      await readConfigBestEffort();
       return {
         status: "ok",
         transport: transportLabel(),
@@ -2173,13 +2304,15 @@ export function createWebResonantiaClient(): ResonantiaClient {
       let localNodes: NodeDto[] = [];
       let localError: unknown = null;
 
-      try {
-        db = await getDb();
-        localNodes = (await readAllNodes(db))
-          .filter((node) => !sessionFilter || node.sessionId === sessionFilter)
-          .sort(byTimestampDesc);
-      } catch (error) {
-        localError = error;
+      if (ENABLE_INDEXEDDB_STORAGE) {
+        try {
+          db = await getDb();
+          localNodes = (await readAllNodes(db))
+            .filter((node) => !sessionFilter || node.sessionId === sessionFilter)
+            .sort(byTimestampDesc);
+        } catch (error) {
+          localError = error;
+        }
       }
 
       if (localNodes.length > 0) {
@@ -2192,7 +2325,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
         };
       }
 
-      const cachedConfig = readConfigFromLocalStorage();
+      const cachedConfig = readConfigFromLocalStorage() ?? defaultConfig();
       const fallbackGateway = normalizeGatewayBaseUrl(cachedConfig?.gatewayBaseUrl ?? "");
 
       if (fallbackGateway) {
@@ -2220,11 +2353,17 @@ export function createWebResonantiaClient(): ResonantiaClient {
             };
           }
 
-          if (localError) {
-            throw localError;
-          }
+          console.warn("[resonantia.web] listNodes gateway fallback failed", {
+            localError: localError ? errorToString(localError) : null,
+            gatewayError: errorToString(gatewayError),
+          });
 
-          throw gatewayError;
+          return {
+            nodes: [],
+            retrieved: 0,
+            source: "fallback-cache",
+            transport: transportLabel(),
+          };
         }
       }
 
@@ -2239,7 +2378,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
       }
 
       if (localError) {
-        throw localError;
+        console.warn("[resonantia.web] listNodes local store unavailable; returning empty result", errorToString(localError));
       }
 
       return {
@@ -2268,7 +2407,11 @@ export function createWebResonantiaClient(): ResonantiaClient {
         };
       }
 
-      const db = await getDb();
+      let db: Surreal | null = null;
+      if (ENABLE_INDEXEDDB_STORAGE) {
+        db = await getDb().catch(() => null);
+      }
+
       const parsed = parseSttpNode(input);
       if (!parsed.node) {
         return {
@@ -2296,7 +2439,9 @@ export function createWebResonantiaClient(): ResonantiaClient {
         };
       }
 
-      await upsertLocalNode(db, node).catch(() => undefined);
+      if (db) {
+        await upsertLocalNode(db, node).catch(() => undefined);
+      }
       writeNodesCacheToLocalStorage(mergeNodesBySyncKey(readNodesCacheFromLocalStorage(), [node]));
 
       return {
@@ -2318,6 +2463,22 @@ export function createWebResonantiaClient(): ResonantiaClient {
         throw new Error("source and target session ids are required");
       }
 
+      const sourceAliases = sessionIdAliases(sourceSessionId);
+      const targetAliases = sessionIdAliases(targetSessionId);
+      const sourceAliasSet = new Set(sourceAliases);
+      const targetAliasSet = new Set(targetAliases);
+
+      const aliasOverlap = sourceAliases.some((alias) => targetAliasSet.has(alias));
+      if (aliasOverlap) {
+        return {
+          sourceSessionId,
+          targetSessionId,
+          movedNodes: 0,
+          movedCalibrations: 0,
+          scopesApplied: 0,
+        };
+      }
+
       if (sourceSessionId === targetSessionId) {
         return {
           sourceSessionId,
@@ -2328,15 +2489,23 @@ export function createWebResonantiaClient(): ResonantiaClient {
         };
       }
 
-      const db = await getDb();
-      const allNodes = await readAllNodes(db);
-      const sourceNodes = allNodes.filter((node) => node.sessionId === sourceSessionId);
+      let db: Surreal | null = null;
+      let dbNodes: NodeDto[] = [];
+      if (ENABLE_INDEXEDDB_STORAGE) {
+        db = await getDb().catch(() => null);
+        if (db) {
+          dbNodes = await readAllNodes(db).catch(() => []);
+        }
+      }
+      const cachedNodes = readNodesCacheFromLocalStorage();
+      const allNodes = mergeNodesBySyncKey(dbNodes, cachedNodes);
+      const sourceNodes = allNodes.filter((node) => sourceAliasSet.has(node.sessionId));
 
       if (sourceNodes.length === 0) {
         throw new Error(`source session not found: ${sourceSessionId}`);
       }
 
-      const targetHasNodes = allNodes.some((node) => node.sessionId === targetSessionId);
+      const targetHasNodes = allNodes.some((node) => targetAliasSet.has(node.sessionId) && !sourceAliasSet.has(node.sessionId));
       if (targetHasNodes && !allowMerge) {
         throw new Error("target session already contains nodes; set allowMerge=true to merge");
       }
@@ -2351,25 +2520,71 @@ export function createWebResonantiaClient(): ResonantiaClient {
           syntheticId: "",
         });
 
-        await upsertLocalNode(db, migrated);
-        await deleteAny(db, recordIdForNode(node.syncKey)).catch(() => undefined);
+        if (db) {
+          await upsertLocalNode(db, migrated).catch(() => undefined);
+          await deleteAny(db, recordIdForNode(node.syncKey)).catch(() => undefined);
+        }
         migratedNodes.push(migrated);
       }
 
       let movedCalibrations = 0;
-      const calibration = await readCalibrationState(db, sourceSessionId);
+      let calibrationSourceSessionId: string | null = null;
+      let calibration: CalibrationStateRecord | null = null;
+
+      for (const alias of sourceAliases) {
+        calibration = readCalibrationStateFromLocalStorage(alias);
+        if (calibration) {
+          calibrationSourceSessionId = alias;
+          break;
+        }
+      }
+
+      if (!calibration && db) {
+        for (const alias of sourceAliases) {
+          calibration = await readCalibrationState(db, alias);
+          if (calibration) {
+            calibrationSourceSessionId = alias;
+            break;
+          }
+        }
+      }
+
       if (calibration) {
-        await upsertAny(db, recordIdForCalibration(targetSessionId), {
+        const migratedCalibration: CalibrationStateRecord = {
           sessionId: targetSessionId,
           currentAvec: calibration.currentAvec,
           triggerHistory: calibration.triggerHistory,
           updatedAt: nowIso(),
-        });
-        await deleteAny(db, recordIdForCalibration(sourceSessionId)).catch(() => undefined);
+        };
+
+        upsertCalibrationStateToLocalStorage(migratedCalibration);
+
+        for (const alias of sourceAliases) {
+          if (alias === targetSessionId) {
+            continue;
+          }
+          deleteCalibrationStateFromLocalStorage(alias);
+        }
+
+        if (db) {
+          await upsertAny(db, recordIdForCalibration(targetSessionId), migratedCalibration);
+
+          for (const alias of sourceAliases) {
+            if (alias === targetSessionId) {
+              continue;
+            }
+            await deleteAny(db, recordIdForCalibration(alias)).catch(() => undefined);
+          }
+
+          if (calibrationSourceSessionId && calibrationSourceSessionId !== targetSessionId) {
+            await deleteAny(db, recordIdForCalibration(calibrationSourceSessionId)).catch(() => undefined);
+          }
+        }
+
         movedCalibrations = 1;
       }
 
-      const untouched = allNodes.filter((node) => node.sessionId !== sourceSessionId);
+      const untouched = allNodes.filter((node) => !sourceAliasSet.has(node.sessionId));
       writeNodesCacheToLocalStorage(mergeNodesBySyncKey(untouched, migratedNodes));
 
       return {
@@ -2404,8 +2619,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
     },
 
     async syncNow(request: SyncNowRequest = {}): Promise<SyncNowResponse> {
-      const db = await getDb();
-      const config = await readConfig(db);
+      const { config, db } = await readConfigBestEffort();
 
       const sessionFilter = request.sessionId?.trim();
       const cachedNodesForSync = readNodesCacheFromLocalStorage()
@@ -2422,14 +2636,16 @@ export function createWebResonantiaClient(): ResonantiaClient {
 
       // localStorage is canonical for web demo mode; DB is a best-effort mirror.
       let localNodes: NodeDto[] = [...cachedNodesForSync];
-      try {
-        const dbNodes = await readAllNodes(db);
-        if (dbNodes.length > 0) {
-          localNodes = mergeNodesBySyncKey(localNodes, dbNodes);
-        }
-      } catch {
-        if (localNodes.length > 0) {
-          await hydrateLocalCacheFromRemote(db, cachedNodesForSync);
+      if (db) {
+        try {
+          const dbNodes = await readAllNodes(db);
+          if (dbNodes.length > 0) {
+            localNodes = mergeNodesBySyncKey(localNodes, dbNodes);
+          }
+        } catch {
+          if (localNodes.length > 0) {
+            await hydrateLocalCacheFromRemote(db, cachedNodesForSync);
+          }
         }
       }
 
@@ -2437,7 +2653,9 @@ export function createWebResonantiaClient(): ResonantiaClient {
       // Seed sync from cache to avoid wiping user-visible history on an empty remote read.
       if (localNodes.length === 0 && cachedNodesForSync.length > 0) {
         localNodes = [...cachedNodesForSync];
-        await hydrateLocalCacheFromRemote(db, cachedNodesForSync);
+        if (db) {
+          await hydrateLocalCacheFromRemote(db, cachedNodesForSync);
+        }
       }
 
       const scopedLocalNodes = sessionFilter
@@ -2519,7 +2737,9 @@ export function createWebResonantiaClient(): ResonantiaClient {
           ?? localByRaw.get(canonicalRawKey(normalized.raw));
 
         if (!existing) {
-          await upsertLocalNode(db, normalized);
+          if (db) {
+            await upsertLocalNode(db, normalized).catch(() => undefined);
+          }
           if (normalized.syncKey.trim()) {
             localBySync.set(normalized.syncKey, normalized);
           }
@@ -2537,7 +2757,9 @@ export function createWebResonantiaClient(): ResonantiaClient {
           continue;
         }
 
-        await upsertLocalNode(db, normalized);
+        if (db) {
+          await upsertLocalNode(db, normalized).catch(() => undefined);
+        }
         if (normalized.syncKey.trim()) {
           localBySync.set(normalized.syncKey, normalized);
         }
@@ -2556,7 +2778,11 @@ export function createWebResonantiaClient(): ResonantiaClient {
     },
 
     async calibrateSession(input: CalibrateSessionInput): Promise<CalibrateSessionResponse> {
-      const db = await getDb();
+      let db: Surreal | null = null;
+      if (ENABLE_INDEXEDDB_STORAGE) {
+        db = await getDb().catch(() => null);
+      }
+
       const sessionId = input.sessionId.trim();
       if (!sessionId) {
         throw new Error("session id is required for calibration");
@@ -2569,19 +2795,26 @@ export function createWebResonantiaClient(): ResonantiaClient {
         autonomy: input.autonomy,
       });
 
-      const existing = await readCalibrationState(db, sessionId);
+      const existing = db
+        ? await readCalibrationState(db, sessionId).catch(() => readCalibrationStateFromLocalStorage(sessionId))
+        : readCalibrationStateFromLocalStorage(sessionId);
       const isFirstCalibration = existing === null;
       const previous = existing?.currentAvec ?? target;
       const delta = isFirstCalibration ? 0 : calibrationDelta(previous, target);
 
       const triggerHistory = [...(existing?.triggerHistory ?? []), input.trigger].slice(-20);
 
-      await upsertAny(db, recordIdForCalibration(sessionId), {
+      const calibrationRecord: CalibrationStateRecord = {
         sessionId,
         currentAvec: target,
         triggerHistory,
         updatedAt: nowIso(),
-      });
+      };
+
+      upsertCalibrationStateToLocalStorage(calibrationRecord);
+      if (db) {
+        await upsertAny(db, recordIdForCalibration(sessionId), calibrationRecord).catch(() => undefined);
+      }
 
       return {
         previousAvec: previous,
@@ -2594,8 +2827,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
     },
 
     async chatCompose(request: ComposeChatRequest): Promise<string | null> {
-      const db = await getDb();
-      const config = await readConfig(db);
+      const { config } = await readConfigBestEffort();
       const conversation = normalizeChatMessages(request.messages, { includeSystem: false });
       if (conversation.length === 0) {
         return null;
@@ -2608,8 +2840,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
     },
 
     async encodeCompose(request: EncodeComposeRequest): Promise<string> {
-      const db = await getDb();
-      const config = await readConfig(db);
+      const { config } = await readConfigBestEffort();
       const sessionId = request.sessionId.trim();
       if (!sessionId) {
         throw new Error("session id is required for encode");
@@ -2646,8 +2877,7 @@ export function createWebResonantiaClient(): ResonantiaClient {
     },
 
     async summarizeNode(rawNode: string): Promise<AiSummary | null> {
-      const db = await getDb();
-      const config = await readConfig(db);
+      const { config } = await readConfigBestEffort();
 
       const text = await runModelChat(config, [
         { role: "system", content: TRANSMUTE_PREAMBLE },

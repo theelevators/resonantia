@@ -11,8 +11,10 @@
   import SettingsDrawer from './components/SettingsDrawer.svelte';
   import WalkthroughGuide from './components/WalkthroughGuide.svelte';
   import AdventureOnboarding from './components/AdventureOnboarding.svelte';
+  import AlkahestPanel from './components/AlkahestPanel.svelte';
   import { getCloudAuthStatus, getGatewayAuthToken, signOutCloud, redirectToCloudSignIn, getCloudAccount } from './cloudAuth';
   import { getGatewayBaseUrl as getManagedGatewayBaseUrl } from './config';
+  import type { WalkthroughMode, WalkthroughPhase } from './walkthrough';
   import { resonantiaClient } from './resonantiaClient';
   import type {
     AiSummary,
@@ -93,6 +95,7 @@
   let sessionById = new Map<string, GraphSessionDto>();
   let selectedSessionNodes: GraphNodeDto[] = [];
   let selectedSessionTopMoments: GraphNodeDto[] = [];
+  let alkahestSessionOptions: GraphSessionDto[] = [];
   const ONBOARDING_DISMISSED_KEY = 'resonantia:onboarding-dismissed:v1';
   const ADVENTURE_COMPLETED_KEY  = 'resonantia:adventure-completed:v1';
   const ADVENTURE_SESSION_FALLBACK = 'first-user-experience-resonantia';
@@ -112,8 +115,7 @@
   let renameSessionError: string | null = null;
   let renameSessionLoading = false;
 
-  type WalkthroughMode = 'first-run' | 'demo';
-  type WalkthroughStep = 'intro' | 'settings' | 'checkin' | 'telescope' | 'importare' | 'live' | 'complete';
+  type WalkthroughStep = WalkthroughPhase;
 
   let walkthroughMode: WalkthroughMode = 'first-run';
   let walkthroughStep: WalkthroughStep = 'intro';
@@ -368,6 +370,82 @@
     renameSessionLoading = false;
   }
 
+  function sessionNotFoundError(error: unknown): boolean {
+    return /source session not found/i.test(String(error ?? ''));
+  }
+
+  function friendlyGraphLoadError(reason: unknown): string {
+    const message = String(reason ?? '').toLowerCase();
+
+    if (
+      message.includes('open db endpoint')
+      || message.includes('timed out after')
+      || message.includes('indexeddb')
+      || message.includes('mem://')
+    ) {
+      return 'local memory is unavailable right now. retry in a moment.';
+    }
+
+    if (message.includes('failed to fetch') || message.includes('network')) {
+      return 'network is unavailable right now. retry in a moment.';
+    }
+
+    return 'unable to load right now. retry in a moment.';
+  }
+
+  function noteDeferredCloudRename(reason: unknown) {
+    const detail = String(reason ?? '').replace(/\s+/g, ' ').trim();
+    if (detail) {
+      console.warn('[rename] cloud rename deferred:', detail);
+    } else {
+      console.warn('[rename] cloud rename deferred');
+    }
+    syncPullResult = null;
+    syncPullError = 'rename saved locally only; cloud currently unavailable';
+    syncDetailTimestamp = new Date();
+    syncDetailAutoOpen = true;
+    scheduleSyncDetailClose(7200);
+  }
+
+  function uniqueSessionIdCandidates(values: string[]): string[] {
+    const unique: string[] = [];
+    const seen = new Set<string>();
+
+    for (const value of values) {
+      const trimmed = value.trim();
+      if (!trimmed || seen.has(trimmed)) {
+        continue;
+      }
+      seen.add(trimmed);
+      unique.push(trimmed);
+    }
+
+    return unique;
+  }
+
+  async function renameSessionLocally(sourceCandidates: string[], targetSessionId: string) {
+    let lastNotFoundError: unknown = null;
+
+    for (const sourceSessionId of sourceCandidates) {
+      try {
+        await resonantiaClient.renameSession({
+          sourceSessionId,
+          targetSessionId,
+          allowMerge: false,
+        });
+        return sourceSessionId;
+      } catch (err) {
+        if (sessionNotFoundError(err)) {
+          lastNotFoundError = err;
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    throw lastNotFoundError ?? new Error('source session not found');
+  }
+
   async function submitRenameSessionDialog() {
     const targetId = renameSessionTargetId;
     if (!targetId) {
@@ -397,16 +475,18 @@
     renameSessionError = null;
 
     try {
+      const idFromGraph = targetId.startsWith('s:') ? targetId.slice(2) : targetId;
+      const sourceCandidates = uniqueSessionIdCandidates([
+        fallback,
+        idFromGraph,
+        targetId,
+      ]);
       let config = await resonantiaClient.getConfig();
       const configuredGateway = (config.gatewayBaseUrl ?? '').trim();
       const usingManagedGateway = isManagedGatewayBaseUrl(configuredGateway);
       let syncAuthToken = (config.gatewayAuthToken ?? '').trim();
 
-      await resonantiaClient.renameSession({
-        sourceSessionId: fallback,
-        targetSessionId: trimmed,
-        allowMerge: false,
-      });
+      const renamedSourceSessionId = await renameSessionLocally(sourceCandidates, trimmed);
 
       if (configuredGateway) {
         if (usingManagedGateway) {
@@ -420,28 +500,16 @@
         }
 
         try {
-          await renameSessionInGateway(configuredGateway, syncAuthToken, fallback, trimmed);
+          await renameSessionInGateway(configuredGateway, syncAuthToken, renamedSourceSessionId, trimmed);
         } catch (cloudError) {
-          try {
-            await resonantiaClient.renameSession({
-              sourceSessionId: trimmed,
-              targetSessionId: fallback,
-              allowMerge: true,
-            });
-          } catch (rollbackError) {
-            renameSessionError = `cloud rename failed and rollback failed: ${String(cloudError)} | rollback: ${String(rollbackError)}`;
-            return;
-          }
-
-          renameSessionError = `cloud rename failed: ${String(cloudError)}`;
-          return;
+          noteDeferredCloudRename(cloudError);
         }
       }
 
-      if (composeSessionId.trim() === fallback) {
+      if (composeSessionId.trim() === fallback || composeSessionId.trim() === renamedSourceSessionId) {
         composeSessionId = trimmed;
       }
-      if (calibSessionId.trim() === fallback) {
+      if (calibSessionId.trim() === fallback || calibSessionId.trim() === renamedSourceSessionId) {
         calibSessionId = trimmed;
       }
 
@@ -457,6 +525,16 @@
   $: sessionById = graph
     ? new Map(graph.sessions.map((session) => [session.id, session]))
     : new Map();
+
+  $: alkahestSessionOptions = graph
+    ? graph.sessions
+        .map((session) => ({
+          ...session,
+          id: canonicalSessionId(session),
+          label: sessionTitle(session),
+        }))
+        .sort((left, right) => right.lastModified.localeCompare(left.lastModified))
+    : [];
 
   $: {
     if (!graph || !selectedSession) {
@@ -529,7 +607,8 @@
       camY = targetCamY = H() / 2;
       camScale = targetCamScale = constellationLayerScale();
     } catch (e) {
-      error = String(e);
+      console.error('[graph] load failed', e);
+      error = friendlyGraphLoadError(e);
     } finally {
       loading = false;
     }
@@ -594,6 +673,8 @@
         return '[data-tour-target="checkin"]';
       case 'telescope':
         return '[data-tour-target="telescope"]';
+      case 'alkahest':
+        return '[data-tour-target="alkahest"]';
       case 'importare':
         return '[data-tour-target="compose-importare"]';
       case 'live':
@@ -614,6 +695,8 @@
         return ['[data-tour-target="checkin"]', '[data-tour-target="menu-toggle"]'];
       case 'telescope':
         return ['[data-tour-target="telescope"]'];
+      case 'alkahest':
+        return ['[data-tour-target="alkahest"]'];
       case 'importare':
         return ['[data-tour-target="compose-importare"]', '[data-tour-target="compose-toggle"]'];
       case 'live':
@@ -634,7 +717,7 @@
   $: walkthroughCompact = onboardingOpen
     && walkthroughStep !== 'intro'
     && walkthroughStep !== 'complete'
-    && (settingsOpen || calibrateOpen || composeOpen || telescopeCameraEngaged);
+    && (settingsOpen || calibrateOpen || composeOpen || cameraOverlayEngaged);
 
   $: if (!onboardingOpen) {
     walkthroughStepSatisfied = false;
@@ -778,11 +861,21 @@
         });
         break;
       case 'telescope':
-        queueWalkthroughAdvance('importare', {
+        queueWalkthroughAdvance('alkahest', {
           holdMs: 220,
           cueDelayMs: 260,
           before: () => {
             closeTelescope();
+            menuOpen = false;
+          },
+        });
+        break;
+      case 'alkahest':
+        queueWalkthroughAdvance('importare', {
+          holdMs: 220,
+          cueDelayMs: 260,
+          before: () => {
+            closeAlkahestPanel();
             menuOpen = false;
           },
         });
@@ -793,7 +886,7 @@
           cueDelayMs: 260,
           before: () => {
             composeModeMenuOpen = false;
-            composeOpen = false;
+            closeComposeDrawer();
           },
         });
         break;
@@ -803,7 +896,7 @@
           cueDelayMs: 0,
           before: () => {
             composeModeMenuOpen = false;
-            composeOpen = false;
+            closeComposeDrawer();
             closeTelescope();
             menuOpen = false;
           },
@@ -1353,9 +1446,19 @@
 
   function closeTransientUi() {
     menuOpen = false;
-    composeOpen = false;
+    closeComposeDrawer();
     calibrateOpen = false;
     settingsOpen = false;
+
+    if (alkahestCameraBefore) {
+      camX = targetCamX = alkahestCameraBefore.x;
+      camY = targetCamY = alkahestCameraBefore.y;
+      camScale = targetCamScale = alkahestCameraBefore.scale;
+    }
+
+    alkahestOpen = false;
+    alkahestPhase = 'idle';
+    alkahestCameraBefore = null;
     closeRenameSessionDialog();
   }
 
@@ -1396,7 +1499,7 @@
   }
 
   function drawEdges() {
-    if (telescopeCameraEngaged || !graph || level > 0) return;
+    if (cameraOverlayEngaged || !graph || level > 0) return;
     const graphData = graph;
     graphData.edges.forEach(e => {
       const sourceSession = sessionById.get(e.source);
@@ -1443,7 +1546,7 @@
   }
 
   function drawSessions() {
-    if (telescopeCameraEngaged || !graph) return;
+    if (cameraOverlayEngaged || !graph) return;
 
     graph.sessions.forEach(s => {
       const sp      = sessionRenderPos(s);
@@ -1495,7 +1598,7 @@
   }
 
   function drawWaveBoundary() {
-    if (telescopeCameraEngaged || level !== 1 || !selectedSession) return;
+    if (cameraOverlayEngaged || level !== 1 || !selectedSession) return;
     const sp = sessionPos[selectedSession.id];
     if (!sp) return;
     const av = sessionAvec(selectedSession);
@@ -1521,7 +1624,7 @@
   }
 
   function drawWaveThreads() {
-    if (telescopeCameraEngaged || level !== 1 || !selectedSession || !graph) return;
+    if (cameraOverlayEngaged || level !== 1 || !selectedSession || !graph) return;
     const session = selectedSession;
     const sp = sessionPos[session.id];
     if (!sp) return;
@@ -1581,7 +1684,7 @@
   }
 
   function drawNodes() {
-    if (telescopeCameraEngaged || !graph || level < 1 || !selectedSession) return;
+    if (cameraOverlayEngaged || !graph || level < 1 || !selectedSession) return;
     const sessionNodes = selectedSessionNodes;
 
     sessionNodes.forEach(n => {
@@ -1627,7 +1730,7 @@
   }
 
   function drawWaveLabels() {
-    if (telescopeCameraEngaged || level !== 1 || !graph || !selectedSession) return;
+    if (cameraOverlayEngaged || level !== 1 || !graph || !selectedSession) return;
     const session = selectedSession;
     const sp = sessionPos[session.id];
     if (!sp) return;
@@ -1816,7 +1919,7 @@
   }
 
   function drawHints() {
-    if (loading || telescopeCameraEngaged) return;
+    if (loading || cameraOverlayEngaged) return;
     ctx.textAlign = 'center';
     ctx.font      = `10px ${FONT_MONO}`;
     const fade = 0.12 + Math.sin(t * 0.7) * 0.06;
@@ -1833,7 +1936,7 @@
   }
 
   function drawNegativeLayerVignette() {
-    if (!negativeLayerActive || level !== 0 || telescopeCameraEngaged) return;
+    if (!negativeLayerActive || level !== 0 || cameraOverlayEngaged) return;
 
     const centerX = W() / 2;
     const centerY = H() / 2;
@@ -1867,6 +1970,7 @@
       || dragging
       || telescopeDragY !== null
       || telescopePhase !== 'idle'
+      || alkahestPhase !== 'idle'
       || cameraIsMoving();
 
     return highActivity ? ACTIVE_FRAME_STEP_MS : IDLE_FRAME_STEP_MS;
@@ -1911,7 +2015,7 @@
     camY     += (targetCamY     - camY)     * LERP;
     camScale += (targetCamScale - camScale) * LERP;
 
-    const driftEnabled = negativeLayerActive && level === 0 && !telescopeCameraEngaged && !dragging;
+    const driftEnabled = negativeLayerActive && level === 0 && !cameraOverlayEngaged && !dragging;
     const driftPx = compactViewport() ? 7.5 : 10.5;
     const targetDriftX = driftEnabled
       ? Math.sin(t * 0.16 + 0.8) * (driftPx / Math.max(camScale, 0.0001))
@@ -1929,6 +2033,7 @@
     }
 
     settleTelescopeTransition();
+    settleAlkahestTransition();
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1995,7 +2100,14 @@
       targetCamScale = focus.scale;
     }
 
-    if (!telescopeCameraEngaged && level === 0) {
+    if (alkahestPhase === 'entering' && alkahestCameraBefore) {
+      const focus = alkahestFocusTargetFrom(alkahestCameraBefore, level);
+      targetCamX = focus.x;
+      targetCamY = focus.y;
+      targetCamScale = focus.scale;
+    }
+
+    if (!cameraOverlayEngaged && level === 0) {
       camX = targetCamX = W() / 2;
       camY = targetCamY = H() / 2;
       camScale = targetCamScale = constellationLayerScale();
@@ -2004,7 +2116,7 @@
 
   // ── Pointer events ─────────────────────────────────────────────
   function onPointerDown(e: PointerEvent) {
-    if (telescopeCameraEngaged || level !== 0) return;
+    if (cameraOverlayEngaged || level !== 0) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
 
     noteInteraction();
@@ -2029,7 +2141,7 @@
 
   function onPointerMove(e: PointerEvent) {
     if (activePanPointerId !== null && e.pointerId !== activePanPointerId) return;
-    if (telescopeCameraEngaged || !dragging || level !== 0) return;
+    if (cameraOverlayEngaged || !dragging || level !== 0) return;
 
     noteInteraction();
     const dx = e.clientX - dragStart.x;
@@ -2048,7 +2160,7 @@
     activePanPointerId = null;
     dragging = false;
     noteInteraction();
-    if (telescopeCameraEngaged) return;
+    if (cameraOverlayEngaged) return;
     if (didDrag) return;
 
     const { x: sx, y: sy } = canvasXY(e);
@@ -2580,6 +2692,44 @@
     content: string;
     at: string;
   };
+  type ComposeContextSession = {
+    sessionId: string;
+    label: string;
+  };
+  type ComposeContextNodeItem = {
+    key: string;
+    sessionId: string;
+    title: string;
+    timestamp: string;
+    tier: string;
+    psi: number;
+    preview: string;
+    raw: string;
+  };
+  type ComposeTabState = {
+    id: string;
+    title: string;
+    sessionId: string;
+    originSessionId: string;
+    draft: string;
+    messages: ComposeMessage[];
+    contextSessions: ComposeContextSession[];
+    browseSessionId: string;
+    injectedNodes: ComposeContextNodeItem[];
+  };
+  type ContinueInAppPayload = {
+    sessionId: string;
+    prompt: string;
+    sourceNodeRaw: string;
+    threadCandidates: ComposeContextSession[];
+  };
+  const COMPOSE_MAX_TABS = 3;
+  const COMPOSE_RECENT_CONTEXT_SESSION_LIMIT = 5;
+  const COMPOSE_CONTEXT_NODE_FETCH_LIMIT = 240;
+  const COMPOSE_PROTOCOL_INTRO = [
+    'STTP protocol introduction: the following full STTP nodes are active memory context for this chat.',
+    'Please gently avoid explaining the protocol unless the user explicitly asks, and otherwise interact directly with the user.',
+  ].join('\n');
   let composeMessages: ComposeMessage[] = [];
   let composeSessionId = '';
   let composeLoading  = false;
@@ -2594,6 +2744,17 @@
   let composePasteNodeOpen = false;
   let composePasteNodeDraft = '';
   let composePasteNodeLoading = false;
+  let composeTabs: ComposeTabState[] = [];
+  let composeActiveTabId = '';
+  let composeContextSessions: ComposeContextSession[] = [];
+  let composeContextOriginSessionId = '';
+  let composeContextBrowseSessionId = '';
+  let composeContextNodes: ComposeContextNodeItem[] = [];
+  let composeContextNodesCache: Record<string, ComposeContextNodeItem[]> = {};
+  let composeContextNodesLoading = false;
+  let composeContextNodesError: string | null = null;
+  let composeInjectedNodes: ComposeContextNodeItem[] = [];
+  let composeLiveUiProps: Record<string, unknown> = {};
   let syncPullLoading = false;
   let syncPullError: string | null = null;
   let syncPullResult: SyncNowResponse | null = null;
@@ -2607,6 +2768,31 @@
   let syncDetailTimeLabel = 'never';
   let syncDetailTimestamp: Date | null = null;
   let syncDetailTimer: ReturnType<typeof setTimeout> | null = null;
+
+  $: composeLiveUiProps = {
+    tabs: composeTabs.map((tab) => ({ id: tab.id, title: tab.title, sessionId: tab.sessionId })),
+    activeTabId: composeActiveTabId,
+    maxTabs: COMPOSE_MAX_TABS,
+    contextSessions: composeContextSessions,
+    contextOriginSessionId: composeContextOriginSessionId,
+    contextBrowseSessionId: composeContextBrowseSessionId,
+    contextNodes: composeContextNodes,
+    contextNodesLoading: composeContextNodesLoading,
+    contextNodesError: composeContextNodesError,
+    injectedNodes: composeInjectedNodes.map((node) => ({
+      key: node.key,
+      title: node.title,
+      sessionId: node.sessionId,
+      timestamp: node.timestamp,
+    })),
+    onDraftInput: handleComposeDraftInput,
+    selectComposeTab: selectComposeLiveTab,
+    createComposeTab: createComposeLiveTab,
+    closeComposeTab: closeComposeLiveTab,
+    selectContextSession: selectComposeContextSession,
+    injectContextNode: injectComposeContextNode,
+    removeInjectedNode: removeComposeInjectedNode,
+  };
 
   type TelescopeRange = {
     label: string;
@@ -2630,6 +2816,7 @@
   const TELESCOPE_CAMERA_SCALE_EPSILON = 0.035;
 
   type TelescopePhase = 'idle' | 'entering' | 'exiting';
+  type AlkahestPhase = 'idle' | 'entering' | 'exiting';
   type CameraState = { x: number; y: number; scale: number };
 
   let telescopeOpen = false;
@@ -2836,8 +3023,74 @@
     }
   }
 
+  function alkahestAnchorScreenPoint() {
+    const compact = W() <= 520;
+    return {
+      x: W() / 2 - (compact ? 8 : 14),
+      y: H() / 2 + (compact ? 16 : 22),
+    };
+  }
+
+  function alkahestFocusScaleFor(levelValue: number, cameraScale: number) {
+    const compact = compactViewport();
+
+    if (levelValue === 1) {
+      return Math.max(compact ? 1.42 : 1.64, Math.min(TELESCOPE_WAVE_SCALE, cameraScale * (compact ? 0.63 : 0.69)));
+    }
+
+    return Math.max(compact ? 0.82 : 0.9, Math.min(TELESCOPE_CONSTELLATION_SCALE, cameraScale * (compact ? 0.8 : 0.85)));
+  }
+
+  function alkahestFocusTargetFrom(camera: CameraState, levelValue: number) {
+    const anchor = alkahestAnchorScreenPoint();
+    const world = worldAtScreenForCamera(anchor.x, anchor.y, camera);
+    const scale = alkahestFocusScaleFor(levelValue, camera.scale);
+    return {
+      x: world.x,
+      y: world.y,
+      scale,
+    };
+  }
+
+  function beginAlkahestEnterTransition() {
+    const startCamera = { x: camX, y: camY, scale: camScale };
+    alkahestCameraBefore = startCamera;
+    const focus = alkahestFocusTargetFrom(startCamera, level);
+    targetCamX = focus.x;
+    targetCamY = focus.y;
+    targetCamScale = focus.scale;
+    alkahestPhase = 'entering';
+  }
+
+  function beginAlkahestExitTransition() {
+    alkahestOpen = false;
+
+    if (!alkahestCameraBefore) {
+      alkahestPhase = 'idle';
+      return;
+    }
+
+    targetCamX = alkahestCameraBefore.x;
+    targetCamY = alkahestCameraBefore.y;
+    targetCamScale = alkahestCameraBefore.scale;
+    alkahestPhase = 'exiting';
+  }
+
+  function settleAlkahestTransition() {
+    if (alkahestPhase === 'entering' && cameraAtTarget()) {
+      alkahestPhase = 'idle';
+      alkahestOpen = true;
+      return;
+    }
+
+    if (alkahestPhase === 'exiting' && cameraAtTarget()) {
+      alkahestPhase = 'idle';
+      alkahestCameraBefore = null;
+    }
+  }
+
   function toggleNegativeLayer() {
-    if (level !== 0 || telescopeCameraEngaged) {
+    if (level !== 0 || cameraOverlayEngaged) {
       return;
     }
 
@@ -2847,7 +3100,7 @@
   }
 
   function openTelescope() {
-    if (!telescopeCanAccess || telescopeCameraEngaged) {
+    if (!telescopeCanAccess || cameraOverlayEngaged) {
       return;
     }
 
@@ -2978,6 +3231,547 @@
   $: telescopeTimelineSessions = listTelescopeSessions(graph?.sessions ?? [], TELESCOPE_RANGES[telescopeRangeIndex].days);
   $: if (!telescopeCanAccess && telescopeCameraEngaged && telescopePhase !== 'exiting') {
     beginTelescopeExitTransition();
+  }
+  $: if (onboardingOpen && walkthroughStep !== 'alkahest' && alkahestCameraEngaged && alkahestPhase !== 'exiting') {
+    beginAlkahestExitTransition();
+  }
+  $: if (level > 1 && alkahestCameraEngaged && alkahestPhase !== 'exiting') {
+    beginAlkahestExitTransition();
+  }
+
+  type AlkahestScope = 'session' | 'sessions' | 'timeline' | 'resonance';
+  type AlkahestMode = 'export' | 'distill' | 'both';
+  type ResonanceDim = 'stability' | 'friction' | 'logic' | 'autonomy';
+
+  type AlkahestScopeScan = {
+    nodes: NodeDto[];
+    modelNodes: NodeDto[];
+    clipped: boolean;
+    sessionCount: number;
+    windowLabel: string;
+  };
+
+  type AlkahestBundle = {
+    kind: 'resonantia-alkahest-bundle';
+    version: '1.0';
+    exportedAt: string;
+    scope: {
+      type: AlkahestScope;
+      sessionId?: string;
+      sessionIds?: string[];
+      timelineDays?: number;
+      resonanceDim?: ResonanceDim;
+      psiMin?: number;
+    };
+    stats: {
+      nodeCount: number;
+      sessionCount: number;
+      windowLabel: string;
+      clippedForModel: boolean;
+    };
+    model: {
+      provider: ModelProvider;
+      promptIncluded: boolean;
+      targetSessionId: string;
+    };
+    nodes: Array<{
+      sessionId: string;
+      timestamp: string;
+      tier: string;
+      psi: number;
+      syncKey: string;
+      syntheticId: string;
+      raw: string;
+    }>;
+    superNode: string | null;
+  };
+
+  const ALKAHEST_MODEL_NODE_LIMIT = 140;
+  const ALKAHEST_DISTILL_CHAR_BUDGET = 220_000;
+  const ALKAHEST_DEFAULT_PROMPT = [
+    'You are the Alkahest memory distiller for STTP.',
+    'Read the full source nodes and extract their most durable meaning into one super node.',
+    'Preserve chronology, unresolved threads, and emotional/decision context.',
+    'Do not summarize loosely. Encode with concrete technical detail and confidence-weighted fields.',
+    'Return exactly one valid STTP node and nothing else.',
+  ].join('\n');
+  const ALKAHEST_TIMELINE_OPTIONS = TELESCOPE_RANGES.map((range) => ({
+    label: range.label,
+    days: range.days,
+  }));
+
+  let alkahestOpen = false;
+  let alkahestScope: AlkahestScope = 'session';
+  let alkahestMode: AlkahestMode = 'both';
+  let alkahestSessionId = '';
+  let alkahestSessionIds: string[] = [];
+  let alkahestTimelineDays = 30;
+  let alkahestResonanceDim: ResonanceDim = 'logic';
+  let alkahestPsiMin = 2.2;
+  let alkahestPrompt = '';
+  let alkahestTargetSessionId = '';
+  let alkahestStoreDistilledNode = true;
+
+  let alkahestLoading = false;
+  let alkahestScopeScanning = false;
+  let alkahestError: string | null = null;
+  let alkahestStatus: string | null = null;
+  let alkahestPreflightNodeCount = 0;
+  let alkahestPreflightSessionCount = 0;
+  let alkahestPreflightWindowLabel = 'scope not scanned yet';
+  let alkahestPreflightClipped = false;
+  let alkahestPreflightLastScannedAt: string | null = null;
+  let alkahestSuperNodePreview = '';
+  let alkahestPhase: AlkahestPhase = 'idle';
+  let alkahestCameraBefore: CameraState | null = null;
+
+  $: alkahestCameraEngaged = alkahestOpen || alkahestPhase !== 'idle';
+  $: cameraOverlayEngaged = telescopeCameraEngaged || alkahestCameraEngaged;
+
+  function defaultAlkahestTargetSessionId() {
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+    return `alkahest-${year}-${month}`;
+  }
+
+  function shouldDistillForAlkahestMode(mode: AlkahestMode) {
+    return mode === 'distill' || mode === 'both';
+  }
+
+  function shouldExportForAlkahestMode(mode: AlkahestMode) {
+    return mode === 'export' || mode === 'both';
+  }
+
+  function dominantResonanceDim(node: NodeDto): ResonanceDim {
+    const avec = node.userAvec;
+    let bestDim: ResonanceDim = 'stability';
+    let bestValue = avec.stability;
+
+    if (avec.friction > bestValue) {
+      bestDim = 'friction';
+      bestValue = avec.friction;
+    }
+    if (avec.logic > bestValue) {
+      bestDim = 'logic';
+      bestValue = avec.logic;
+    }
+    if (avec.autonomy > bestValue) {
+      bestDim = 'autonomy';
+    }
+
+    return bestDim;
+  }
+
+  function alkahestWindowLabel(nodes: NodeDto[]) {
+    if (nodes.length === 0) {
+      return 'no nodes matched this scope';
+    }
+
+    const sorted = [...nodes].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+    const firstTs = Date.parse(sorted[0].timestamp);
+    const lastTs = Date.parse(sorted[sorted.length - 1].timestamp);
+
+    const firstLabel = Number.isFinite(firstTs)
+      ? new Date(firstTs).toLocaleDateString([], { month: 'short', day: 'numeric' })
+      : sorted[0].timestamp;
+    const lastLabel = Number.isFinite(lastTs)
+      ? new Date(lastTs).toLocaleDateString([], { month: 'short', day: 'numeric' })
+      : sorted[sorted.length - 1].timestamp;
+
+    if (firstLabel === lastLabel) {
+      return firstLabel;
+    }
+
+    return `${firstLabel} → ${lastLabel}`;
+  }
+
+  async function fetchAlkahestSourceNodes(): Promise<NodeDto[]> {
+    const requestedSession = alkahestScope === 'session'
+      ? (alkahestSessionId.trim() || canonicalSessionId(selectedSession))
+      : '';
+    const requestedSessionIds = alkahestScope === 'sessions'
+      ? Array.from(new Set(alkahestSessionIds.map((id) => id.trim()).filter(Boolean)))
+      : [];
+
+    if (alkahestScope === 'session' && !requestedSession) {
+      throw new Error('choose a session before running Alkahest session scope');
+    }
+
+    if (alkahestScope === 'sessions' && requestedSessionIds.length === 0) {
+      throw new Error('choose at least one session for multi-session scope');
+    }
+
+    if (requestedSession) {
+      alkahestSessionId = requestedSession;
+    }
+
+    if (requestedSessionIds.length > 0) {
+      alkahestSessionIds = requestedSessionIds;
+    }
+
+    if (alkahestScope === 'sessions') {
+      const mergedNodes = new Map<string, NodeDto>();
+      for (const requestedId of requestedSessionIds) {
+        const listed = await resonantiaClient.listNodes(400, requestedId);
+        if (listed.transport) {
+          lastTransportLabel = listed.transport;
+        }
+        applySourceBadge(listed.source, listed.transport ?? lastTransportLabel);
+        for (const node of listed.nodes) {
+          const dedupeKey = `${node.sessionId}|${node.syntheticId}|${node.syncKey}|${node.timestamp}`;
+          if (!mergedNodes.has(dedupeKey)) {
+            mergedNodes.set(dedupeKey, node);
+          }
+        }
+      }
+      return [...mergedNodes.values()];
+    }
+
+    const listed = await resonantiaClient.listNodes(400, requestedSession || undefined);
+    if (listed.transport) {
+      lastTransportLabel = listed.transport;
+    }
+    applySourceBadge(listed.source, listed.transport ?? lastTransportLabel);
+    return listed.nodes;
+  }
+
+  function filterAlkahestScopeNodes(nodes: NodeDto[]): NodeDto[] {
+    const sessionId = alkahestSessionId.trim();
+    const sessionIds = new Set(alkahestSessionIds.map((id) => id.trim()).filter(Boolean));
+
+    return nodes.filter((node) => {
+      if (alkahestScope === 'session') {
+        return sessionId ? node.sessionId === sessionId : false;
+      }
+
+      if (alkahestScope === 'sessions') {
+        return sessionIds.has(node.sessionId);
+      }
+
+      if (alkahestScope === 'timeline') {
+        if (alkahestTimelineDays >= Number.MAX_SAFE_INTEGER) {
+          return true;
+        }
+        return daysAgoFromTimestamp(node.timestamp) <= alkahestTimelineDays;
+      }
+
+      const dominant = dominantResonanceDim(node);
+      return dominant === alkahestResonanceDim && node.psi >= alkahestPsiMin;
+    });
+  }
+
+  function buildAlkahestDistillInput(nodes: NodeDto[], scan: AlkahestScopeScan) {
+    const prime = (alkahestPrompt.trim() || ALKAHEST_DEFAULT_PROMPT).trim();
+    const base = [
+      prime,
+      '',
+      `scope_type: ${alkahestScope}`,
+      `scope_node_count: ${scan.nodes.length}`,
+      `scope_session_count: ${scan.sessionCount}`,
+      `scope_window: ${scan.windowLabel}`,
+      `clipped_for_model: ${scan.clipped ? 'true' : 'false'}`,
+      '',
+      'Source nodes follow.',
+      'Use them as canonical memory and output one STTP node only.',
+      '',
+    ].join('\n');
+
+    let consumed = base.length;
+    const chunks: string[] = [base];
+
+    for (let index = 0; index < nodes.length; index += 1) {
+      const node = nodes[index];
+      const chunk = [
+        `--- node ${index + 1} ---`,
+        `session_id: ${node.sessionId}`,
+        `timestamp: ${node.timestamp}`,
+        `tier: ${node.tier}`,
+        `psi: ${node.psi.toFixed(4)}`,
+        'raw:',
+        node.raw,
+        '',
+      ].join('\n');
+
+      if (consumed + chunk.length > ALKAHEST_DISTILL_CHAR_BUDGET) {
+        break;
+      }
+
+      chunks.push(chunk);
+      consumed += chunk.length;
+    }
+
+    chunks.push('Return only one valid STTP node. No commentary.');
+    return chunks.join('\n');
+  }
+
+  function buildAlkahestBundle(scan: AlkahestScopeScan, superNode: string | null): AlkahestBundle {
+    const sessionId = alkahestSessionId.trim();
+    const sessionIds = Array.from(new Set(alkahestSessionIds.map((id) => id.trim()).filter(Boolean)));
+    const targetSessionId = alkahestTargetSessionId.trim() || defaultAlkahestTargetSessionId();
+
+    return {
+      kind: 'resonantia-alkahest-bundle',
+      version: '1.0',
+      exportedAt: new Date().toISOString(),
+      scope: {
+        type: alkahestScope,
+        ...(alkahestScope === 'session' ? { sessionId } : {}),
+        ...(alkahestScope === 'sessions' ? { sessionIds } : {}),
+        ...(alkahestScope === 'timeline' ? { timelineDays: alkahestTimelineDays } : {}),
+        ...(alkahestScope === 'resonance'
+          ? {
+            resonanceDim: alkahestResonanceDim,
+            psiMin: alkahestPsiMin,
+          }
+          : {}),
+      },
+      stats: {
+        nodeCount: scan.nodes.length,
+        sessionCount: scan.sessionCount,
+        windowLabel: scan.windowLabel,
+        clippedForModel: scan.clipped,
+      },
+      model: {
+        provider: modelProvider,
+        promptIncluded: shouldDistillForAlkahestMode(alkahestMode),
+        targetSessionId,
+      },
+      nodes: scan.nodes.map((node) => ({
+        sessionId: node.sessionId,
+        timestamp: node.timestamp,
+        tier: node.tier,
+        psi: node.psi,
+        syncKey: node.syncKey,
+        syntheticId: node.syntheticId,
+        raw: node.raw,
+      })),
+      superNode,
+    };
+  }
+
+  function downloadAlkahestBundle(bundle: AlkahestBundle) {
+    if (typeof document === 'undefined') {
+      throw new Error('json export is unavailable in this runtime');
+    }
+
+    const stamp = bundle.exportedAt.slice(0, 10);
+    const fileName = `alkahest-${bundle.scope.type}-${stamp}.json`;
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+    const href = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = href;
+    anchor.download = fileName;
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(href);
+  }
+
+  async function collectAlkahestScopeScan(): Promise<AlkahestScopeScan> {
+    const sourceNodes = await fetchAlkahestSourceNodes();
+    const filtered = filterAlkahestScopeNodes(sourceNodes).sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+    const clipped = filtered.length > ALKAHEST_MODEL_NODE_LIMIT;
+    const modelNodes = clipped ? filtered.slice(-ALKAHEST_MODEL_NODE_LIMIT) : filtered;
+    const sessionCount = new Set(filtered.map((node) => node.sessionId)).size;
+    const windowLabel = alkahestWindowLabel(filtered);
+
+    alkahestPreflightNodeCount = filtered.length;
+    alkahestPreflightSessionCount = sessionCount;
+    alkahestPreflightWindowLabel = windowLabel;
+    alkahestPreflightClipped = clipped;
+    alkahestPreflightLastScannedAt = new Date().toISOString();
+
+    return {
+      nodes: filtered,
+      modelNodes,
+      clipped,
+      sessionCount,
+      windowLabel,
+    };
+  }
+
+  function primeAlkahestDefaults() {
+    if (!alkahestSessionId.trim() && selectedSession) {
+      alkahestSessionId = canonicalSessionId(selectedSession);
+    }
+    if (alkahestSessionIds.length === 0 && selectedSession) {
+      alkahestSessionIds = [canonicalSessionId(selectedSession)];
+    }
+    if (!alkahestTargetSessionId.trim()) {
+      alkahestTargetSessionId = defaultAlkahestTargetSessionId();
+    }
+    if (!alkahestPrompt.trim()) {
+      alkahestPrompt = ALKAHEST_DEFAULT_PROMPT;
+    }
+  }
+
+  function toggleAlkahestOpen() {
+    if (alkahestCameraEngaged) {
+      closeAlkahestPanel();
+      return;
+    }
+
+    if (level > 1 || cameraOverlayEngaged) {
+      return;
+    }
+
+    noteInteraction();
+    markWalkthroughStepSatisfied('alkahest');
+    closeTransientUi();
+    composeModeMenuOpen = false;
+    syncDetailAutoOpen = false;
+    syncDetailHover = false;
+
+    primeAlkahestDefaults();
+    beginAlkahestEnterTransition();
+  }
+
+  function closeAlkahestPanel() {
+    if (!alkahestCameraEngaged) {
+      alkahestOpen = false;
+      alkahestPhase = 'idle';
+      alkahestCameraBefore = null;
+      return;
+    }
+
+    noteInteraction();
+    beginAlkahestExitTransition();
+  }
+
+  function resetAlkahestFlow() {
+    alkahestScope = 'session';
+    alkahestMode = 'both';
+    alkahestSessionId = selectedSession ? canonicalSessionId(selectedSession) : '';
+    alkahestSessionIds = selectedSession ? [canonicalSessionId(selectedSession)] : [];
+    alkahestTimelineDays = 30;
+    alkahestResonanceDim = 'logic';
+    alkahestPsiMin = 2.2;
+    alkahestPrompt = ALKAHEST_DEFAULT_PROMPT;
+    alkahestTargetSessionId = defaultAlkahestTargetSessionId();
+    alkahestStoreDistilledNode = true;
+
+    alkahestError = null;
+    alkahestStatus = null;
+    alkahestPreflightNodeCount = 0;
+    alkahestPreflightSessionCount = 0;
+    alkahestPreflightWindowLabel = 'scope not scanned yet';
+    alkahestPreflightClipped = false;
+    alkahestPreflightLastScannedAt = null;
+    alkahestSuperNodePreview = '';
+
+    closeAlkahestPanel();
+  }
+
+  async function scanAlkahestScope() {
+    if (alkahestLoading || alkahestScopeScanning) {
+      return;
+    }
+
+    alkahestScopeScanning = true;
+    alkahestError = null;
+    alkahestStatus = null;
+    try {
+      const scan = await collectAlkahestScopeScan();
+      alkahestStatus = `scope ready · ${scan.nodes.length} nodes`;
+    } catch (err) {
+      alkahestError = String(err);
+    } finally {
+      alkahestScopeScanning = false;
+    }
+  }
+
+  async function runAlkahestFlow() {
+    if (alkahestLoading || alkahestScopeScanning) {
+      return;
+    }
+
+    alkahestLoading = true;
+    alkahestError = null;
+    alkahestStatus = null;
+
+    try {
+      const scan = await collectAlkahestScopeScan();
+      if (scan.nodes.length === 0) {
+        throw new Error('no nodes matched this Alkahest scope');
+      }
+
+      let superNode: string | null = null;
+      let storeStatus: string | null = null;
+
+      if (shouldDistillForAlkahestMode(alkahestMode)) {
+        const targetSessionId = alkahestTargetSessionId.trim() || defaultAlkahestTargetSessionId();
+        alkahestTargetSessionId = targetSessionId;
+
+        const content = buildAlkahestDistillInput(scan.modelNodes, scan);
+        const encodedNode = await runManagedAiWithTokenRetry(() =>
+          resonantiaClient.encodeCompose({
+            sessionId: targetSessionId,
+            messages: [
+              {
+                role: 'user',
+                content,
+              },
+            ],
+          })
+        );
+
+        superNode = encodedNode.trim();
+        alkahestSuperNodePreview = superNode;
+
+        if (alkahestStoreDistilledNode) {
+          const stored = await resonantiaClient.storeContext({
+            node: superNode,
+            sessionId: targetSessionId,
+          });
+          if (!stored.valid) {
+            throw new Error(stored.validationError ?? 'distilled node failed STTP validation');
+          }
+
+          const upsertStatus = stored.upsertStatus ?? (stored.duplicateSkipped ? 'duplicate' : 'stored');
+          storeStatus = stored.duplicateSkipped ? 'duplicate skipped' : upsertStatus;
+          await loadGraph();
+        }
+      }
+
+      if (shouldExportForAlkahestMode(alkahestMode)) {
+        const bundle = buildAlkahestBundle(scan, superNode);
+        downloadAlkahestBundle(bundle);
+      }
+
+      const outcomes: string[] = [];
+      if (shouldDistillForAlkahestMode(alkahestMode)) {
+        outcomes.push('super node distilled');
+      }
+      if (storeStatus) {
+        outcomes.push(`stored ${storeStatus}`);
+      }
+      if (shouldExportForAlkahestMode(alkahestMode)) {
+        outcomes.push('bundle exported');
+      }
+
+      alkahestStatus = outcomes.join(' · ') || 'alkahest complete';
+    } catch (err) {
+      alkahestError = String(err);
+    } finally {
+      alkahestLoading = false;
+    }
+  }
+
+  async function copyAlkahestSuperNode() {
+    const source = alkahestSuperNodePreview.trim();
+    if (!source) {
+      return;
+    }
+
+    try {
+      await copyTextToClipboard(source);
+      alkahestStatus = 'super node copied';
+      alkahestError = null;
+    } catch (err) {
+      alkahestError = String(err);
+    }
   }
 
   type CalibrationVector = {
@@ -3172,12 +3966,437 @@
     }, 1)}); box-shadow: 0 0 18px ${avecColor(avec, 0.24)};`;
   }
 
+  function composeSessionLabel(sessionId: string) {
+    const normalized = sessionId.trim();
+    if (!normalized) {
+      return '';
+    }
+
+    const graphLabel = graph?.sessions.find((session) => session.id === sessionKey(normalized))?.label ?? '';
+    const base = (graphLabel || normalized).trim();
+    return base.replace(/_/g, ' ');
+  }
+
+  function composeNodePreview(rawNode: string) {
+    const normalized = rawNode.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      return '(empty node)';
+    }
+
+    return normalized.length > 210 ? `${normalized.slice(0, 210)}...` : normalized;
+  }
+
+  function normalizeComposeContextSessions(candidates: ComposeContextSession[]) {
+    const bySessionId = new Map<string, ComposeContextSession>();
+
+    for (const candidate of candidates) {
+      const sessionId = candidate.sessionId.trim();
+      if (!sessionId) {
+        continue;
+      }
+
+      const existing = bySessionId.get(sessionId);
+      if (existing) {
+        continue;
+      }
+
+      bySessionId.set(sessionId, {
+        sessionId,
+        label: (candidate.label.trim() || composeSessionLabel(sessionId) || sessionId).replace(/_/g, ' '),
+      });
+    }
+
+    return [...bySessionId.values()];
+  }
+
+  function buildComposeTabId() {
+    return `compose-${Date.now()}-${Math.round(Math.random() * 1_000_000).toString(36)}`;
+  }
+
+  function buildComposeTabTitle(sessionId: string, fallbackIndex: number) {
+    const label = composeSessionLabel(sessionId);
+    return label || `thread ${fallbackIndex + 1}`;
+  }
+
+  function composeRecentTimelineContextSessions(limit = COMPOSE_RECENT_CONTEXT_SESSION_LIMIT): ComposeContextSession[] {
+    if (!graph) {
+      return [];
+    }
+
+    return graph.sessions
+      .slice()
+      .sort((left, right) => right.lastModified.localeCompare(left.lastModified))
+      .map((session) => {
+        const sessionId = canonicalSessionId(session).trim();
+        return {
+          sessionId,
+          label: composeSessionLabel(sessionId) || sessionId,
+        };
+      })
+      .filter((candidate) => Boolean(candidate.sessionId))
+      .slice(0, limit);
+  }
+
+  function buildDefaultComposeTabState(
+    seedSessionId: string,
+    options: { includeRecentContext?: boolean } = {},
+  ): ComposeTabState {
+    const normalizedSession = seedSessionId.trim();
+    const includeRecentContext = options.includeRecentContext === true;
+    const seedContextSessions = normalizedSession
+      ? [
+        {
+          sessionId: normalizedSession,
+          label: composeSessionLabel(normalizedSession) || normalizedSession,
+        },
+      ]
+      : [];
+    const contextSessions = includeRecentContext
+      ? normalizeComposeContextSessions([
+        ...seedContextSessions,
+        ...composeRecentTimelineContextSessions(),
+      ])
+      : seedContextSessions;
+
+    return {
+      id: buildComposeTabId(),
+      title: buildComposeTabTitle(normalizedSession, composeTabs.length),
+      sessionId: normalizedSession,
+      originSessionId: normalizedSession,
+      draft: '',
+      messages: [],
+      contextSessions,
+      browseSessionId: '',
+      injectedNodes: [],
+    };
+  }
+
+  function snapshotActiveComposeTab() {
+    if (composeMode !== 'live' || !composeActiveTabId) {
+      return;
+    }
+
+    const activeIndex = composeTabs.findIndex((tab) => tab.id === composeActiveTabId);
+    if (activeIndex < 0) {
+      return;
+    }
+
+    const current = composeTabs[activeIndex];
+    const normalizedSession = composeSessionId.trim();
+    const nextTitle = composeSessionLabel(normalizedSession) || current.title || buildComposeTabTitle(normalizedSession, activeIndex);
+
+    const snapshot: ComposeTabState = {
+      ...current,
+      title: nextTitle,
+      sessionId: normalizedSession,
+      originSessionId: composeContextOriginSessionId,
+      draft: composeDraft,
+      messages: [...composeMessages],
+      contextSessions: [...composeContextSessions],
+      browseSessionId: composeContextBrowseSessionId,
+      injectedNodes: [...composeInjectedNodes],
+    };
+
+    composeTabs = [
+      ...composeTabs.slice(0, activeIndex),
+      snapshot,
+      ...composeTabs.slice(activeIndex + 1),
+    ];
+  }
+
+  function configureComposeContextSessions(
+    candidates: ComposeContextSession[],
+    preferredSessionId = '',
+    autoSelectPreferred = false,
+  ) {
+    composeContextSessions = normalizeComposeContextSessions(candidates);
+
+    if (composeContextSessions.length === 0) {
+      composeContextBrowseSessionId = '';
+      composeContextNodes = [];
+      return;
+    }
+
+    const preferred = preferredSessionId.trim();
+    if (
+      autoSelectPreferred
+      && preferred
+      && composeContextSessions.some((candidate) => candidate.sessionId === preferred)
+    ) {
+      composeContextBrowseSessionId = preferred;
+      return;
+    }
+
+    if (composeContextSessions.some((candidate) => candidate.sessionId === composeContextBrowseSessionId)) {
+      return;
+    }
+
+    composeContextBrowseSessionId = '';
+    composeContextNodes = [];
+  }
+
+  function ensureComposeContextSession(sessionId: string) {
+    const normalized = sessionId.trim();
+    if (!normalized) {
+      return;
+    }
+
+    if (composeContextSessions.some((candidate) => candidate.sessionId === normalized)) {
+      return;
+    }
+
+    configureComposeContextSessions(
+      [
+        ...composeContextSessions,
+        {
+          sessionId: normalized,
+          label: composeSessionLabel(normalized) || normalized,
+        },
+      ],
+      composeContextBrowseSessionId,
+      Boolean(composeContextBrowseSessionId),
+    );
+  }
+
+  async function loadComposeContextNodes(sessionId: string) {
+    const normalized = sessionId.trim();
+    if (!normalized) {
+      composeContextNodes = [];
+      composeContextNodesError = null;
+      return;
+    }
+
+    const cached = composeContextNodesCache[normalized];
+    if (cached) {
+      composeContextNodes = cached;
+      composeContextNodesError = null;
+      return;
+    }
+
+    composeContextNodesLoading = true;
+    composeContextNodesError = null;
+
+    try {
+      const listed = await resonantiaClient.listNodes(COMPOSE_CONTEXT_NODE_FETCH_LIMIT, normalized);
+      if (listed.transport) {
+        lastTransportLabel = listed.transport;
+      }
+      applySourceBadge(listed.source, listed.transport ?? lastTransportLabel);
+
+      const mapped = listed.nodes
+        .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
+        .map((node) => ({
+          key: `${node.sessionId}|${node.syntheticId}|${node.syncKey}|${node.timestamp}`,
+          sessionId: node.sessionId,
+          title: `${node.tier} · Ψ ${node.psi.toFixed(2)}`,
+          timestamp: node.timestamp,
+          tier: node.tier,
+          psi: node.psi,
+          preview: composeNodePreview(node.raw),
+          raw: node.raw,
+        }));
+
+      composeContextNodesCache = {
+        ...composeContextNodesCache,
+        [normalized]: mapped,
+      };
+      composeContextNodes = mapped;
+    } catch (err) {
+      composeContextNodes = [];
+      composeContextNodesError = String(err);
+    } finally {
+      composeContextNodesLoading = false;
+    }
+  }
+
+  function selectComposeContextSession(sessionId: string) {
+    const normalized = sessionId.trim();
+    if (!normalized) {
+      return;
+    }
+
+    composeContextBrowseSessionId = normalized;
+    void loadComposeContextNodes(normalized);
+    snapshotActiveComposeTab();
+  }
+
+  function injectComposeContextNode(nodeKey: string) {
+    const selected = composeContextNodes.find((node) => node.key === nodeKey);
+    if (!selected) {
+      return;
+    }
+
+    if (composeInjectedNodes.some((node) => node.key === selected.key)) {
+      return;
+    }
+
+    composeInjectedNodes = [...composeInjectedNodes, selected];
+    composeContextNodesError = null;
+    snapshotActiveComposeTab();
+  }
+
+  function removeComposeInjectedNode(nodeKey: string) {
+    composeInjectedNodes = composeInjectedNodes.filter((node) => node.key !== nodeKey);
+    snapshotActiveComposeTab();
+  }
+
+  function seedComposeInjectedNode(sessionId: string, rawNode: string) {
+    const normalizedSession = sessionId.trim();
+    const normalizedRaw = rawNode.trim();
+    if (!normalizedSession || !normalizedRaw) {
+      return;
+    }
+
+    const key = `${normalizedSession}:${normalizedRaw.length}:${Math.round(hashUnit(`${normalizedSession}:${normalizedRaw}`) * 1_000_000_000)}`;
+    if (composeInjectedNodes.some((node) => node.key === key)) {
+      return;
+    }
+
+    composeInjectedNodes = [
+      ...composeInjectedNodes,
+      {
+        key,
+        sessionId: normalizedSession,
+        title: composeSessionLabel(normalizedSession) || normalizedSession,
+        timestamp: new Date().toISOString(),
+        tier: 'raw',
+        psi: 0,
+        preview: composeNodePreview(normalizedRaw),
+        raw: normalizedRaw,
+      },
+    ];
+  }
+
+  function loadComposeTab(tabId: string) {
+    const tab = composeTabs.find((entry) => entry.id === tabId);
+    if (!tab) {
+      return;
+    }
+
+    composeActiveTabId = tab.id;
+    composeSessionId = tab.sessionId;
+    composeContextOriginSessionId = tab.originSessionId || tab.sessionId;
+    composeDraft = tab.draft;
+    composeMessages = [...tab.messages];
+    configureComposeContextSessions(tab.contextSessions, tab.browseSessionId, Boolean(tab.browseSessionId));
+    composeInjectedNodes = [...tab.injectedNodes];
+    composeContextNodesError = null;
+    composeContextNodes = [];
+
+    if (composeContextBrowseSessionId) {
+      void loadComposeContextNodes(composeContextBrowseSessionId);
+    }
+  }
+
+  function ensureComposeLiveTab() {
+    if (composeTabs.length === 0) {
+      const seeded = buildDefaultComposeTabState(canonicalSessionId(selectedSession), {
+        includeRecentContext: true,
+      });
+      composeTabs = [seeded];
+      loadComposeTab(seeded.id);
+      return;
+    }
+
+    if (!composeActiveTabId || !composeTabs.some((tab) => tab.id === composeActiveTabId)) {
+      loadComposeTab(composeTabs[0].id);
+      return;
+    }
+
+    loadComposeTab(composeActiveTabId);
+  }
+
+  function createComposeLiveTab() {
+    if (composeTabs.length >= COMPOSE_MAX_TABS) {
+      composeContextNodesError = `up to ${COMPOSE_MAX_TABS} live threads are available`;
+      return;
+    }
+
+    snapshotActiveComposeTab();
+    const seedSession = composeSessionId.trim() || canonicalSessionId(selectedSession);
+    const nextTab = buildDefaultComposeTabState(seedSession);
+    composeTabs = [...composeTabs, nextTab];
+    composeContextNodesError = null;
+    loadComposeTab(nextTab.id);
+  }
+
+  function selectComposeLiveTab(tabId: string) {
+    if (!tabId || tabId === composeActiveTabId) {
+      return;
+    }
+
+    snapshotActiveComposeTab();
+    loadComposeTab(tabId);
+  }
+
+  function closeComposeLiveTab(tabId: string) {
+    if (composeTabs.length <= 1) {
+      return;
+    }
+
+    snapshotActiveComposeTab();
+    const closeIndex = composeTabs.findIndex((tab) => tab.id === tabId);
+    if (closeIndex < 0) {
+      return;
+    }
+
+    const wasActive = composeActiveTabId === tabId;
+    const nextTabs = composeTabs.filter((tab) => tab.id !== tabId);
+    composeTabs = nextTabs;
+
+    if (wasActive) {
+      const fallbackIndex = Math.max(0, closeIndex - 1);
+      const fallback = nextTabs[fallbackIndex] ?? nextTabs[0];
+      if (fallback) {
+        loadComposeTab(fallback.id);
+      }
+      return;
+    }
+
+    if (!nextTabs.some((tab) => tab.id === composeActiveTabId) && nextTabs[0]) {
+      loadComposeTab(nextTabs[0].id);
+    }
+  }
+
+  function closeComposeDrawer() {
+    snapshotActiveComposeTab();
+    composeOpen = false;
+  }
+
+  function handleComposeDraftInput() {
+    snapshotActiveComposeTab();
+  }
+
+  function buildComposeInjectedContextSystemMessage(): ChatMessage | null {
+    if (composeInjectedNodes.length === 0) {
+      return null;
+    }
+
+    const blocks: string[] = [];
+    for (const node of composeInjectedNodes) {
+      blocks.push(
+        `context_session_id: ${node.sessionId}`,
+        'full_node:',
+        node.raw,
+        '',
+      );
+    }
+
+    return {
+      role: 'system',
+      content: [COMPOSE_PROTOCOL_INTRO, '', ...blocks].join('\n'),
+    };
+  }
+
   function openCompose(mode: 'live' | 'importare' = 'live') {
+    snapshotActiveComposeTab();
     composeModeMenuOpen = false;
     composeMode = mode;
-    composeSessionId = canonicalSessionId(selectedSession);
-    composeDraft = '';
-    composeMessages = [];
+
+    if (mode === 'live') {
+      ensureComposeLiveTab();
+    }
+
     composeError = null;
     composeResult = null;
     composeLoading = false;
@@ -3187,45 +4406,84 @@
     clearComposePromptCopiedTimer();
     composePromptCopied = false;
     composePromptCopyError = null;
+    composeContextNodesError = null;
     composePasteNodeOpen = mode === 'importare';
     composePasteNodeDraft = '';
     composePasteNodeLoading = false;
     composeOpen = true;
+
+    if (mode === 'live' && composeContextBrowseSessionId) {
+      void loadComposeContextNodes(composeContextBrowseSessionId);
+    }
   }
 
-  function continueThreadInCompose(event: CustomEvent<{ sessionId: string; prompt: string }>) {
+  function continueThreadInCompose(event: CustomEvent<ContinueInAppPayload>) {
     const sessionId = event.detail.sessionId.trim();
     const prompt = event.detail.prompt.trim();
-    if (!sessionId || !prompt) {
+    const sourceNodeRaw = event.detail.sourceNodeRaw.trim();
+    const incomingSessions = normalizeComposeContextSessions(event.detail.threadCandidates ?? []);
+
+    if (!sessionId || !prompt || !sourceNodeRaw) {
       return;
     }
 
     closeCard();
+    snapshotActiveComposeTab();
+
+    let targetTabId = composeTabs.find((tab) => tab.sessionId === sessionId)?.id ?? '';
+    if (!targetTabId && composeTabs.length < COMPOSE_MAX_TABS) {
+      const nextTab = buildDefaultComposeTabState(sessionId);
+      composeTabs = [...composeTabs, nextTab];
+      targetTabId = nextTab.id;
+    }
+    if (!targetTabId) {
+      targetTabId = composeActiveTabId || composeTabs[0]?.id || '';
+    }
+    if (!targetTabId) {
+      return;
+    }
 
     composeModeMenuOpen = false;
     composeMode = 'live';
-    composeSessionId = sessionId;
-    composeDraft = '';
-    composeMessages = [
-      {
-        role: 'user',
-        content: prompt,
-        at: new Date().toISOString(),
-      },
-    ];
     composeError = null;
     composeResult = null;
     composeLoading = false;
-    composeReplyLoading = false;
     composeEncodePromptSent = false;
     composePromptCopyLoading = false;
     clearComposePromptCopiedTimer();
     composePromptCopied = false;
     composePromptCopyError = null;
+
+    loadComposeTab(targetTabId);
+    composeSessionId = sessionId;
+    composeContextOriginSessionId = sessionId;
+    configureComposeContextSessions(
+      [
+        ...composeContextSessions,
+        {
+          sessionId,
+          label: composeSessionLabel(sessionId) || sessionId,
+        },
+        ...incomingSessions,
+      ],
+      '',
+      false,
+    );
+    composeContextBrowseSessionId = '';
+    composeContextNodes = [];
+    seedComposeInjectedNode(sessionId, sourceNodeRaw);
+
+    if (composeContextBrowseSessionId) {
+      void loadComposeContextNodes(composeContextBrowseSessionId);
+    }
+
     composePasteNodeOpen = false;
     composePasteNodeDraft = '';
     composePasteNodeLoading = false;
     composeOpen = true;
+    snapshotActiveComposeTab();
+
+    void sendComposeMessage(prompt);
   }
 
   function toggleComposeModeMenu() {
@@ -3249,6 +4507,20 @@
     composeMode = 'live';
     composePasteNodeOpen = false;
     composePasteNodeDraft = '';
+    ensureComposeLiveTab();
+
+    if (composeContextBrowseSessionId) {
+      void loadComposeContextNodes(composeContextBrowseSessionId);
+    }
+  }
+
+  function handleComposeSessionInput() {
+    if (composeError && /session id is required/i.test(composeError) && composeSessionId.trim()) {
+      composeError = null;
+    }
+
+    ensureComposeContextSession(composeSessionId);
+    snapshotActiveComposeTab();
   }
 
   function clearComposeConversation() {
@@ -3260,8 +4532,10 @@
     clearComposePromptCopiedTimer();
     composePromptCopied = false;
     composePromptCopyError = null;
+    composeContextNodesError = null;
     composePasteNodeOpen = false;
     composePasteNodeDraft = '';
+    snapshotActiveComposeTab();
   }
 
   function clearComposePromptCopiedTimer() {
@@ -3358,12 +4632,17 @@
       if (composeError && /session id is required/i.test(composeError)) {
         composeError = null;
       }
+      ensureComposeContextSession(parsedSessionId);
+      snapshotActiveComposeTab();
     }
   }
 
-  async function sendComposeMessage() {
-    const text = composeDraft.trim();
+  async function sendComposeMessage(seedText?: string) {
+    const text = (seedText ?? composeDraft).trim();
     if (!text || composeReplyLoading || composeLoading) {
+      if (seedText?.trim() && composeReplyLoading) {
+        composeError = 'wait for the current response before injecting another message';
+      }
       return;
     }
 
@@ -3375,6 +4654,8 @@
 
     composeError = null;
     composeResult = null;
+    composeContextNodesError = null;
+    ensureComposeContextSession(sessionId);
 
     const nextMessages: ComposeMessage[] = [
       ...composeMessages,
@@ -3386,14 +4667,22 @@
     ];
 
     composeMessages = nextMessages;
-    composeDraft = '';
+    if (!seedText) {
+      composeDraft = '';
+    }
     composeReplyLoading = true;
 
     try {
+      const systemContext = buildComposeInjectedContextSystemMessage();
+      const outboundMessages = composeApiMessages(nextMessages);
+      if (systemContext) {
+        outboundMessages.unshift(systemContext);
+      }
+
       const reply = await runManagedAiWithTokenRetry(() =>
         resonantiaClient.chatCompose({
           sessionId,
-          messages: composeApiMessages(nextMessages),
+          messages: outboundMessages,
         })
       );
 
@@ -3407,10 +4696,12 @@
           },
         ];
       }
+      snapshotActiveComposeTab();
     } catch (err) {
       composeError = String(err);
     } finally {
       composeReplyLoading = false;
+      snapshotActiveComposeTab();
     }
   }
 
@@ -3450,6 +4741,7 @@
 
       composePasteNodeDraft = '';
       composePasteNodeOpen = false;
+      snapshotActiveComposeTab();
       await loadGraph();
     } catch (err) {
       composeError = String(err);
@@ -3585,9 +4877,14 @@
       };
       composeDraft = '';
       composeMessages = [];
+      snapshotActiveComposeTab();
       await loadGraph();
     } catch (err) { composeError = String(err); }
-    finally      { composeLoading = false; composeEncodePromptSent = false; }
+    finally      {
+      composeLoading = false;
+      composeEncodePromptSent = false;
+      snapshotActiveComposeTab();
+    }
   }
 
   // ── Calibrate ───────────────────────────────────────────────
@@ -4018,10 +5315,10 @@
     on:pointercancel={onPointerCancel}
     on:lostpointercapture={onPointerCancel}
     class:grabbing={dragging}
-    class:telescope-open={telescopeCameraEngaged}
+    class:camera-overlay-open={cameraOverlayEngaged}
   ></canvas>
 
-  <nav class="navbar" class:faded={telescopeCameraEngaged}>
+  <nav class="navbar" class:faded={cameraOverlayEngaged}>
     <div class="nav-left">
       {#if level > 0}
         <button class="back-btn" on:click={level === 2 ? surfaceToWave : surfaceToConstellation}>
@@ -4081,12 +5378,48 @@
   />
 
   <ComposeLauncher
-    faded={telescopeCameraEngaged}
+    faded={cameraOverlayEngaged}
     hidden={composeOpen}
     menuOpen={composeModeMenuOpen}
     on:toggle={toggleComposeModeMenu}
     on:live={openComposeLive}
     on:importare={openComposeImportare}
+  />
+
+  <AlkahestPanel
+    hidden={telescopeCameraEngaged || level > 1}
+    open={alkahestOpen}
+    cameraEngaged={alkahestCameraEngaged}
+    phase={alkahestPhase}
+    loading={alkahestLoading}
+    scopeScanning={alkahestScopeScanning}
+    error={alkahestError}
+    status={alkahestStatus}
+    bind:scope={alkahestScope}
+    bind:mode={alkahestMode}
+    bind:sessionId={alkahestSessionId}
+    bind:sessionIds={alkahestSessionIds}
+    sessions={alkahestSessionOptions}
+    bind:timelineDays={alkahestTimelineDays}
+    timelineOptions={ALKAHEST_TIMELINE_OPTIONS}
+    bind:resonanceDim={alkahestResonanceDim}
+    bind:psiMin={alkahestPsiMin}
+    bind:prompt={alkahestPrompt}
+    bind:targetSessionId={alkahestTargetSessionId}
+    bind:storeDistilledNode={alkahestStoreDistilledNode}
+    preflightNodeCount={alkahestPreflightNodeCount}
+    preflightWindowLabel={alkahestPreflightWindowLabel}
+    preflightSessionCount={alkahestPreflightSessionCount}
+    preflightClipped={alkahestPreflightClipped}
+    preflightLastScannedAt={alkahestPreflightLastScannedAt}
+    modelProvider={modelProvider}
+    superNodePreview={alkahestSuperNodePreview}
+    toggleOpen={toggleAlkahestOpen}
+    closePanel={closeAlkahestPanel}
+    cancelAndReset={resetAlkahestFlow}
+    scanScope={scanAlkahestScope}
+    runAlkahest={runAlkahestFlow}
+    copySuperNode={copyAlkahestSuperNode}
   />
 
   <AdventureOnboarding
@@ -4177,6 +5510,7 @@
   {/if}
 
   <ComposeDrawer
+    {...composeLiveUiProps}
     open={composeOpen}
     mode={composeMode}
     bind:sessionId={composeSessionId}
@@ -4193,12 +5527,8 @@
     pasteNodeOpen={composePasteNodeOpen}
     bind:pasteNodeDraft={composePasteNodeDraft}
     pasteNodeLoading={composePasteNodeLoading}
-    onClose={() => (composeOpen = false)}
-    onSessionInput={() => {
-      if (composeError && /session id is required/i.test(composeError) && composeSessionId.trim()) {
-        composeError = null;
-      }
-    }}
+    onClose={closeComposeDrawer}
+    onSessionInput={handleComposeSessionInput}
     sendComposeMessage={sendComposeMessage}
     copyComposeEncodePrompt={copyComposeEncodePrompt}
     toggleComposePasteNode={toggleComposePasteNode}
@@ -4301,7 +5631,7 @@
     display: block;
   }
   canvas.grabbing { cursor: grabbing; }
-  canvas.telescope-open { pointer-events: none; }
+  canvas.camera-overlay-open { pointer-events: none; }
 
   .navbar {
     position: absolute;
@@ -4488,5 +5818,12 @@
     border-color: rgba(132, 147, 187, 0.26);
     background: rgba(43, 52, 75, 0.3);
     color: rgba(192, 204, 231, 0.78);
+  }
+
+  @media (hover: none) and (pointer: coarse) {
+    .rename-session-input {
+      font-size: 16px;
+      line-height: 1.35;
+    }
   }
 </style>
