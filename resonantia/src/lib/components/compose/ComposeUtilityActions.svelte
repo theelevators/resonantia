@@ -91,26 +91,27 @@
   }
 
   .compose-utility-divider {
-    color: rgba(255, 255, 255, 0.18);
-    font-size: 9px;
+    color: rgba(206, 224, 238, 0.42);
+    font-size: 10px;
     line-height: 1;
     user-select: none;
   }
 
   .compose-routing-pref {
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.04em;
     text-transform: lowercase;
-    color: rgba(162, 190, 210, 0.62);
+    color: rgba(190, 213, 230, 0.82);
   }
 
   .compose-link-btn {
     border: 0.5px solid rgba(98, 136, 163, 0.25);
     background: rgba(15, 27, 40, 0.6);
-    padding: 3px 7px;
+    min-height: 28px;
+    padding: 5px 9px;
     margin: 0;
     font-family: 'Departure Mono', monospace;
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.04em;
     text-transform: lowercase;
     border-radius: 999px;
@@ -120,8 +121,9 @@
   }
 
   .compose-utility-actions.compact .compose-link-btn {
-    padding: 3px 6px;
-    font-size: 8px;
+    min-height: 27px;
+    padding: 4px 8px;
+    font-size: 8.5px;
     letter-spacing: 0.04em;
   }
 
@@ -135,7 +137,7 @@
   }
 
   .compose-link-btn:hover:not(:disabled) {
-    color: rgba(209, 230, 245, 0.9);
+    color: rgba(224, 240, 250, 0.96);
     border-color: rgba(129, 174, 203, 0.38);
     background: rgba(38, 67, 89, 0.58);
   }
@@ -204,8 +206,9 @@
     .compose-link-btn {
       width: auto;
       text-align: center;
-      padding: 4px 7px;
-      font-size: 8px;
+      min-height: 32px;
+      padding: 6px 9px;
+      font-size: 9.5px;
       letter-spacing: 0.04em;
     }
 

@@ -51,14 +51,15 @@
   .compose-link-btn {
     border: 0.5px solid rgba(126, 173, 198, 0.24);
     background: rgba(80, 119, 143, 0.09);
-    padding: 4px 9px;
+    min-height: 28px;
+    padding: 5px 10px;
     margin: 0;
     font-family: 'Departure Mono', monospace;
-    font-size: 9px;
+    font-size: 9.5px;
     letter-spacing: 0.06em;
     text-transform: lowercase;
     border-radius: 999px;
-    color: rgba(191, 223, 242, 0.72);
+    color: rgba(211, 233, 247, 0.88);
     cursor: pointer;
     transition: color 0.2s, border-color 0.2s, background 0.2s, opacity 0.2s;
   }
@@ -73,10 +74,10 @@
 
   .compose-paste-intro {
     margin: 0 0 8px;
-    font-size: 9px;
+    font-size: 10px;
     line-height: 1.45;
     letter-spacing: 0.04em;
-    color: rgba(255, 255, 255, 0.48);
+    color: rgba(216, 230, 243, 0.74);
     text-transform: lowercase;
   }
 
@@ -99,10 +100,10 @@
   }
 
   .compose-paste-mode-note {
-    font-size: 9px;
+    font-size: 9.5px;
     letter-spacing: 0.05em;
     text-transform: lowercase;
-    color: rgba(168, 188, 230, 0.74);
+    color: rgba(189, 209, 240, 0.88);
   }
 
   .compose-paste-editor {
@@ -231,9 +232,10 @@
 
   .drawer-btn {
     font-family: 'Departure Mono', monospace;
-    font-size: 10px;
+    font-size: 10.5px;
     letter-spacing: 0.08em;
-    padding: 6px 14px;
+    min-height: 32px;
+    padding: 7px 14px;
     border-radius: 999px;
     cursor: pointer;
     transition: color 0.2s, border-color 0.2s, background 0.2s, opacity 0.2s;
@@ -241,8 +243,8 @@
 
   .drawer-btn.cancel {
     background: transparent;
-    border: 0.5px solid rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.3);
+    border: 0.5px solid rgba(181, 204, 220, 0.26);
+    color: rgba(205, 221, 232, 0.76);
   }
 
   .drawer-btn.cancel:hover:not(:disabled) {
@@ -252,9 +254,9 @@
   }
 
   .drawer-btn.submit {
-    background: rgba(255, 255, 255, 0.06);
-    border: 0.5px solid rgba(255, 255, 255, 0.2);
-    color: rgba(255, 255, 255, 0.8);
+    background: rgba(86, 129, 162, 0.24);
+    border: 0.5px solid rgba(173, 207, 230, 0.44);
+    color: rgba(231, 243, 251, 0.96);
   }
 
   .drawer-btn.submit:hover:not(:disabled) {
@@ -265,6 +267,13 @@
   .drawer-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+
+  @media (hover: none) and (pointer: coarse) {
+    .drawer-textarea {
+      font-size: 16px;
+      line-height: 1.35;
+    }
   }
 
   @media (max-width: 520px) {

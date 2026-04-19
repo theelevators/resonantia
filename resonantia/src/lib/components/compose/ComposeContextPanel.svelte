@@ -102,15 +102,15 @@
     align-items: center;
     gap: 8px;
     margin-bottom: 0;
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: rgba(210, 231, 249, 0.88);
   }
 
   .compose-context-head small {
-    font-size: 8px;
-    color: rgba(206, 224, 242, 0.74);
+    font-size: 8.5px;
+    color: rgba(223, 235, 245, 0.84);
   }
 
   .compose-context-sessions {
@@ -126,10 +126,11 @@
     color: rgba(213, 232, 248, 0.9);
     border-radius: 999px;
     font-family: 'Departure Mono', monospace;
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.05em;
     text-transform: lowercase;
-    padding: 4px 8px;
+    min-height: 28px;
+    padding: 5px 9px;
     cursor: pointer;
     max-width: 170px;
     white-space: nowrap;
@@ -191,19 +192,19 @@
   }
 
   .compose-context-node-title {
-    font-size: 8px;
-    color: rgba(229, 241, 252, 0.88);
+    font-size: 9px;
+    color: rgba(234, 244, 252, 0.96);
   }
 
   .compose-context-node-meta {
-    font-size: 8px;
-    color: rgba(184, 208, 228, 0.7);
+    font-size: 8.5px;
+    color: rgba(202, 221, 238, 0.82);
   }
 
   .compose-context-node-preview {
-    font-size: 8px;
+    font-size: 9px;
     line-height: 1.35;
-    color: rgba(199, 220, 238, 0.78);
+    color: rgba(215, 231, 243, 0.9);
     word-break: break-word;
   }
 
@@ -213,10 +214,11 @@
     color: rgba(239, 248, 255, 0.96);
     border-radius: 999px;
     font-family: 'Departure Mono', monospace;
-    font-size: 7px;
+    font-size: 8.5px;
     letter-spacing: 0.06em;
     text-transform: lowercase;
-    padding: 5px 7px;
+    min-height: 28px;
+    padding: 5px 9px;
     cursor: pointer;
     flex-shrink: 0;
   }
@@ -234,18 +236,19 @@
     color: rgba(232, 220, 189, 0.9);
     border-radius: 999px;
     font-family: 'Departure Mono', monospace;
-    font-size: 7px;
+    font-size: 8.5px;
     letter-spacing: 0.05em;
     text-transform: lowercase;
-    padding: 4px 7px;
+    min-height: 26px;
+    padding: 4px 8px;
     cursor: pointer;
   }
 
   .compose-thread-note {
     margin: 0;
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.03em;
-    color: rgba(200, 225, 245, 0.72);
+    color: rgba(213, 231, 244, 0.86);
   }
 
   .compose-thread-error {
@@ -256,6 +259,19 @@
     font-size: 10px;
     color: rgba(233, 148, 58, 0.88);
     margin: 6px 0 0;
+  }
+
+  @media (max-width: 520px) {
+    .compose-context-panel {
+      padding: 10px;
+      gap: 8px;
+    }
+
+    .compose-context-session,
+    .compose-context-inject,
+    .compose-injected-chip {
+      min-height: 30px;
+    }
   }
 
   @keyframes composeContextPopupIn {

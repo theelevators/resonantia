@@ -6302,7 +6302,7 @@
   .navbar {
     position: absolute;
     top: var(--safe-top); left: 0; right: 0;
-    height: 46px;
+    height: 48px;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -6331,25 +6331,32 @@
     font-weight: 300;
     font-style: italic;
     font-size: 15px;
-    color: rgba(255, 255, 255, 0.4);
+    color: rgba(225, 235, 244, 0.62);
     letter-spacing: 0.04em;
   }
 
   .back-btn {
     font-family: 'Departure Mono', monospace;
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.08em;
-    color: rgba(255, 255, 255, 0.35);
-    background: transparent;
-    border: 0.5px solid rgba(255, 255, 255, 0.1);
+    color: rgba(220, 231, 239, 0.82);
+    background: rgba(18, 24, 34, 0.5);
+    border: 0.5px solid rgba(175, 199, 214, 0.28);
     border-radius: 4px;
-    padding: 4px 10px;
+    min-height: 34px;
+    padding: 6px 12px;
     cursor: pointer;
-    transition: color 0.2s, border-color 0.2s;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
   }
   .back-btn:hover {
-    color: rgba(255, 255, 255, 0.75);
-    border-color: rgba(255, 255, 255, 0.25);
+    color: rgba(240, 246, 250, 0.98);
+    border-color: rgba(196, 220, 236, 0.48);
+    background: rgba(43, 58, 76, 0.58);
+  }
+
+  .back-btn:focus-visible {
+    outline: 1px solid rgba(188, 221, 244, 0.78);
+    outline-offset: 1px;
   }
 
   .status-dot {
@@ -6629,6 +6636,27 @@
 
     .compose-continue-option {
       padding: 11px 12px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .navbar {
+      height: 52px;
+      padding: 0 calc(14px + var(--safe-right)) 0 calc(14px + var(--safe-left));
+    }
+
+    .nav-left,
+    .nav-right {
+      gap: 10px;
+    }
+
+    .brand {
+      font-size: 15.5px;
+    }
+
+    .back-btn {
+      min-height: 38px;
+      font-size: 11.5px;
     }
   }
 </style>

@@ -218,10 +218,10 @@
 
   .compose-encode-hint {
     margin: 0;
-    font-size: 9px;
+    font-size: 9.5px;
     font-style: italic;
     letter-spacing: 0.04em;
-    color: rgba(255, 255, 255, 0.14);
+    color: rgba(205, 221, 236, 0.3);
     transition: color 0.35s ease;
     text-transform: lowercase;
     white-space: nowrap;
@@ -230,7 +230,7 @@
   }
 
   .compose-encode-hint.visible {
-    color: rgba(208, 222, 236, 0.7);
+    color: rgba(220, 233, 244, 0.86);
   }
 
   .compose-encode-hint.warm {
@@ -243,10 +243,10 @@
 
   .compose-context-readout {
     margin: 0;
-    font-size: 8px;
+    font-size: 8.5px;
     letter-spacing: 0.05em;
     text-transform: lowercase;
-    color: rgba(173, 198, 220, 0.62);
+    color: rgba(191, 214, 232, 0.8);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -259,21 +259,22 @@
   .compose-avec-orb-btn {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 9px;
     border: none;
     background: transparent;
-    padding: 0;
+    padding: 2px 4px;
     margin: 0;
     cursor: pointer;
+    border-radius: 999px;
   }
 
   .compose-avec-orb {
-    width: 18px;
-    height: 18px;
+    width: 20px;
+    height: 20px;
     border-radius: 50%;
     position: relative;
     overflow: hidden;
-    border: 0.5px solid rgba(255, 255, 255, 0.12);
+    border: 0.5px solid rgba(195, 218, 236, 0.26);
     transition: transform 0.16s ease, border-color 0.2s ease;
   }
 
@@ -350,11 +351,11 @@
     position: absolute;
     top: 50%;
     left: 50%;
-    width: 3px;
-    height: 3px;
+    width: 4px;
+    height: 4px;
     border-radius: 50%;
     transform: translate(-50%, -50%);
-    background: rgba(255, 255, 255, 0.52);
+    background: rgba(235, 244, 251, 0.7);
   }
 
   .compose-avec-popover {
@@ -362,11 +363,11 @@
     position: absolute;
     right: 0;
     bottom: 26px;
-    width: 228px;
+    width: 246px;
     border-radius: 10px;
-    border: 0.5px solid rgba(100, 190, 170, 0.18);
+    border: 0.5px solid rgba(131, 194, 177, 0.3);
     background: rgba(12, 18, 28, 0.97);
-    padding: 12px;
+    padding: 13px;
     box-shadow: 0 12px 30px rgba(2, 6, 12, 0.46);
     z-index: 6;
   }
@@ -377,10 +378,10 @@
 
   .compose-pop-title {
     margin: 0 0 12px;
-    font-size: 9px;
+    font-size: 9.5px;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.28);
+    color: rgba(208, 224, 237, 0.58);
   }
 
   .compose-pop-row {
@@ -419,9 +420,9 @@
 
   .compose-pop-label {
     flex: 1;
-    font-size: 10px;
+    font-size: 10.5px;
     letter-spacing: 0.04em;
-    color: rgba(255, 255, 255, 0.38);
+    color: rgba(209, 224, 237, 0.72);
     text-transform: lowercase;
   }
 
@@ -463,9 +464,9 @@
   .compose-pop-val {
     min-width: 30px;
     text-align: right;
-    font-size: 10px;
+    font-size: 10.5px;
     letter-spacing: 0.02em;
-    color: rgba(255, 255, 255, 0.42);
+    color: rgba(214, 227, 237, 0.76);
   }
 
   .compose-pop-divider {
@@ -476,25 +477,40 @@
 
   .compose-pop-footer {
     margin: 0;
-    font-size: 9px;
+    font-size: 9.5px;
     text-align: center;
-    color: rgba(255, 255, 255, 0.3);
+    color: rgba(206, 221, 234, 0.62);
     line-height: 1.5;
     text-transform: lowercase;
   }
 
   .compose-pop-footer.muted {
-    color: rgba(255, 255, 255, 0.22);
+    color: rgba(195, 212, 228, 0.52);
   }
 
   @media (max-width: 520px) {
     .compose-status-bar {
-      padding: 7px 0 10px;
+      gap: 8px;
+      padding: 8px 0 10px;
+    }
+
+    .compose-encode-hint {
+      font-size: 10px;
+    }
+
+    .compose-context-readout {
+      font-size: 9px;
+    }
+
+    .compose-avec-orb {
+      width: 22px;
+      height: 22px;
     }
 
     .compose-avec-popover {
-      width: min(228px, calc(100vw - 52px));
-      right: -8px;
+      width: min(248px, calc(100vw - 44px));
+      bottom: 32px;
+      right: -6px;
     }
   }
 </style>

@@ -92,4 +92,11 @@
       padding: 6px 8px;
     }
   }
+
+  @media (hover: none) and (pointer: coarse) {
+    .drawer-input {
+      font-size: 16px;
+      line-height: 1.35;
+    }
+  }
 </style>

@@ -995,14 +995,14 @@
   }
 
   .compose-session-chip {
-    border: 0.5px solid rgba(100, 180, 165, 0.16);
-    background: rgba(100, 180, 165, 0.05);
-    color: rgba(180, 210, 200, 0.62);
+    border: 0.5px solid rgba(118, 194, 179, 0.24);
+    background: rgba(100, 180, 165, 0.09);
+    color: rgba(200, 226, 216, 0.86);
     border-radius: 20px;
-    font-size: 10px;
+    font-size: 10.5px;
     letter-spacing: 0.02em;
     text-align: left;
-    padding: 4px 10px;
+    padding: 6px 11px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1053,25 +1053,25 @@
   .compose-chat-header {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 11px;
     padding: 14px 16px 10px;
-    border-bottom: 0.5px solid rgba(255, 255, 255, 0.04);
-    background: linear-gradient(180deg, rgba(10, 16, 25, 0.34), rgba(10, 16, 25, 0.06));
+    border-bottom: 0.5px solid rgba(255, 255, 255, 0.08);
+    background: linear-gradient(180deg, rgba(10, 16, 25, 0.46), rgba(10, 16, 25, 0.14));
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
   }
 
   .compose-rail-toggle {
-    width: 22px;
-    height: 22px;
+    width: 30px;
+    height: 30px;
     border-radius: 6px;
-    border: 0.5px solid rgba(255, 255, 255, 0.12);
-    background: transparent;
+    border: 0.5px solid rgba(184, 214, 234, 0.28);
+    background: rgba(20, 31, 43, 0.44);
     display: inline-flex;
     flex-direction: column;
     justify-content: center;
-    gap: 2px;
-    padding: 0 5px;
+    gap: 3px;
+    padding: 0 7px;
     cursor: pointer;
     flex-shrink: 0;
     transition: border-color 0.2s ease, background 0.2s ease;
@@ -1084,9 +1084,9 @@
 
   .compose-rail-toggle span {
     display: block;
-    height: 1px;
+    height: 1.2px;
     border-radius: 1px;
-    background: rgba(150, 200, 190, 0.72);
+    background: rgba(195, 226, 244, 0.82);
   }
 
   .compose-rail-toggle span:nth-child(2) {
@@ -1098,39 +1098,56 @@
   }
 
   .compose-close-btn {
-    border: none;
-    background: transparent;
-    color: rgba(255, 255, 255, 0.3);
-    font-size: 14px;
+    border: 0.5px solid rgba(184, 214, 234, 0.24);
+    background: rgba(20, 30, 42, 0.42);
+    color: rgba(219, 232, 244, 0.78);
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    font-size: 16px;
     cursor: pointer;
     line-height: 1;
     padding: 0;
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
   }
 
   .compose-close-btn:hover {
-    color: rgba(100, 190, 170, 0.86);
+    color: rgba(212, 240, 255, 0.96);
+    border-color: rgba(149, 208, 238, 0.48);
+    background: rgba(36, 58, 76, 0.6);
   }
 
   .compose-tools-toggle {
-    border: 0.5px solid rgba(122, 179, 208, 0.24);
+    border: 0.5px solid rgba(133, 187, 214, 0.34);
     border-radius: 999px;
-    background: rgba(76, 123, 156, 0.14);
-    color: rgba(181, 214, 236, 0.72);
+    background: rgba(63, 104, 133, 0.24);
+    color: rgba(206, 228, 245, 0.9);
     font-family: 'Departure Mono', monospace;
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.06em;
     text-transform: lowercase;
     cursor: pointer;
-    padding: 4px 8px;
+    padding: 6px 11px;
     flex-shrink: 0;
+    min-height: 30px;
     transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
   }
 
   .compose-tools-toggle:hover {
-    border-color: rgba(155, 207, 238, 0.42);
-    background: rgba(92, 145, 181, 0.22);
-    color: rgba(221, 240, 255, 0.92);
+    border-color: rgba(168, 214, 240, 0.52);
+    background: rgba(84, 134, 168, 0.36);
+    color: rgba(229, 244, 255, 0.98);
+  }
+
+  .compose-rail-toggle:focus-visible,
+  .compose-tools-toggle:focus-visible,
+  .compose-close-btn:focus-visible {
+    outline: 1px solid rgba(179, 221, 247, 0.78);
+    outline-offset: 1px;
   }
 
   .compose-session-row {
@@ -1142,23 +1159,23 @@
   }
 
   .compose-session-tag {
-    font-size: 9px;
+    font-size: 9.5px;
     text-transform: uppercase;
     letter-spacing: 0.12em;
-    color: rgba(255, 255, 255, 0.22);
+    color: rgba(214, 230, 243, 0.58);
     flex-shrink: 0;
   }
 
   .compose-session-input {
     width: 100%;
     min-width: 0;
-    border: 0.5px solid rgba(255, 255, 255, 0.1);
-    background: rgba(255, 255, 255, 0.03);
+    border: 0.5px solid rgba(173, 205, 227, 0.24);
+    background: rgba(18, 28, 40, 0.5);
     border-radius: 7px;
-    color: rgba(206, 217, 228, 0.84);
-    font-size: 11px;
+    color: rgba(223, 233, 243, 0.95);
+    font-size: 11.5px;
     letter-spacing: 0.03em;
-    padding: 6px 10px;
+    padding: 7px 10px;
     outline: none;
     transition: border-color 0.2s ease;
   }
@@ -1168,7 +1185,7 @@
   }
 
   .compose-session-input::placeholder {
-    color: rgba(255, 255, 255, 0.24);
+    color: rgba(210, 225, 238, 0.48);
   }
 
   .compose-input-zone {
@@ -1207,9 +1224,9 @@
     pointer-events: auto;
     padding: 9px;
     border-radius: 12px;
-    border: 0.5px solid rgba(102, 143, 172, 0.22);
-    background: linear-gradient(170deg, rgba(11, 22, 33, 0.86), rgba(9, 17, 27, 0.9));
-    box-shadow: 0 10px 22px rgba(2, 7, 14, 0.34), inset 0 0 0 1px rgba(76, 116, 145, 0.1);
+    border: 0.5px solid rgba(123, 167, 198, 0.34);
+    background: linear-gradient(170deg, rgba(12, 23, 34, 0.9), rgba(9, 17, 27, 0.94));
+    box-shadow: 0 12px 26px rgba(2, 7, 14, 0.42), inset 0 0 0 1px rgba(90, 132, 163, 0.16);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     display: grid;
@@ -1241,10 +1258,10 @@
     background: rgba(39, 64, 83, 0.44);
     color: rgba(183, 211, 231, 0.8);
     font-family: 'Departure Mono', monospace;
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.05em;
     text-transform: lowercase;
-    padding: 6px 10px;
+    padding: 7px 12px;
     cursor: pointer;
     transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease, opacity 0.2s ease;
   }
@@ -1274,9 +1291,9 @@
 
   .compose-live-tools-hint {
     margin: 0;
-    font-size: 8px;
+    font-size: 8.5px;
     letter-spacing: 0.03em;
-    color: rgba(162, 190, 210, 0.6);
+    color: rgba(184, 209, 227, 0.78);
     text-transform: lowercase;
     line-height: 1.4;
   }
@@ -1289,13 +1306,13 @@
   }
 
   .drawer-error {
-    font-size: 10px;
+    font-size: 10.5px;
     color: rgba(233, 148, 58, 0.88);
     margin: 6px 14px 0;
   }
 
   .drawer-success {
-    font-size: 10px;
+    font-size: 10.5px;
     color: rgba(122, 170, 122, 0.9);
     margin: 6px 14px 0;
   }
@@ -1312,7 +1329,8 @@
     }
 
     .compose-chat-header {
-      padding: 12px 12px 9px;
+      gap: 8px;
+      padding: 11px 12px 9px;
     }
 
     .compose-session-row {
@@ -1320,8 +1338,20 @@
     }
 
     .compose-tools-toggle {
-      padding: 4px 7px;
-      font-size: 8px;
+      min-height: 34px;
+      padding: 7px 10px;
+      font-size: 10px;
+    }
+
+    .compose-rail-toggle,
+    .compose-close-btn {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+    }
+
+    .compose-close-btn {
+      font-size: 18px;
     }
 
     .compose-live-tools-popover {
@@ -1340,7 +1370,7 @@
     }
 
     .compose-live-tools-wrap {
-      padding: 8px;
+      padding: 10px;
       max-height: min(70vh, calc(100% - 72px));
     }
 
@@ -1362,6 +1392,13 @@
     .compose-live-stars {
       transition: none;
       animation: none;
+    }
+  }
+
+  @media (hover: none) and (pointer: coarse) {
+    .compose-session-input {
+      font-size: 16px;
+      line-height: 1.35;
     }
   }
 </style>

@@ -66,30 +66,30 @@
     justify-content: space-between;
     align-items: center;
     gap: 8px;
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: rgba(195, 216, 233, 0.82);
   }
 
   .compose-chat-settings-head small {
-    color: rgba(171, 195, 214, 0.56);
+    color: rgba(192, 214, 229, 0.7);
   }
 
   .compose-chat-settings-row {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    font-size: 9px;
+    font-size: 10px;
     letter-spacing: 0.04em;
-    color: rgba(196, 216, 232, 0.84);
+    color: rgba(216, 230, 240, 0.94);
     text-transform: lowercase;
     cursor: pointer;
   }
 
   .compose-chat-settings-row input {
-    width: 12px;
-    height: 12px;
+    width: 14px;
+    height: 14px;
     margin: 0;
     accent-color: rgba(125, 169, 206, 0.95);
   }
@@ -108,14 +108,14 @@
     justify-content: space-between;
     align-items: center;
     gap: 8px;
-    font-size: 9px;
+    font-size: 10px;
     letter-spacing: 0.04em;
-    color: rgba(194, 215, 231, 0.82);
+    color: rgba(211, 226, 239, 0.92);
     text-transform: lowercase;
   }
 
   .compose-chat-settings-threshold-head strong {
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.05em;
     color: rgba(221, 235, 245, 0.9);
   }
@@ -128,9 +128,9 @@
 
   .compose-chat-settings-note {
     margin: 0;
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.03em;
-    color: rgba(164, 186, 205, 0.62);
+    color: rgba(190, 210, 226, 0.78);
     text-transform: lowercase;
   }
 

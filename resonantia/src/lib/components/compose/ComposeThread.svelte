@@ -59,7 +59,7 @@
     border: none;
     border-radius: 0;
     background: transparent;
-    padding: 20px clamp(14px, 5.6vw, 118px) 18px;
+    padding: 18px clamp(14px, 4.8vw, 88px) 16px;
     margin: 0;
     display: flex;
     flex-direction: column;
@@ -95,7 +95,7 @@
     text-align: center;
     font-size: 12px;
     line-height: 1.8;
-    color: rgba(192, 209, 227, 0.2);
+    color: rgba(202, 220, 236, 0.46);
     letter-spacing: 0.03em;
     font-style: italic;
     text-transform: lowercase;
@@ -104,12 +104,12 @@
 
   .compose-bubble {
     width: fit-content;
-    max-width: min(74%, 640px);
-    border: 0.5px solid rgba(255, 255, 255, 0.055);
+    max-width: min(79%, 740px);
+    border: 0.5px solid rgba(190, 211, 228, 0.16);
     border-radius: 10px 10px 10px 2px;
-    padding: 9px 13px;
-    background: rgba(255, 255, 255, 0.026);
-    box-shadow: 0 5px 14px rgba(3, 8, 15, 0.2);
+    padding: 10px 14px;
+    background: rgba(20, 31, 43, 0.34);
+    box-shadow: 0 6px 16px rgba(3, 8, 15, 0.22);
     backdrop-filter: blur(2px);
     -webkit-backdrop-filter: blur(2px);
   }
@@ -117,15 +117,15 @@
   .compose-bubble.user {
     margin-left: auto;
     border-color: rgba(100, 190, 170, 0.18);
-    background: rgba(100, 190, 170, 0.075);
+    background: rgba(100, 190, 170, 0.14);
     border-radius: 10px 10px 2px 10px;
     box-shadow: 0 6px 15px rgba(16, 58, 50, 0.2);
   }
 
   .compose-bubble.assistant {
     margin-right: auto;
-    border-color: rgba(255, 255, 255, 0.065);
-    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(183, 208, 228, 0.18);
+    background: rgba(26, 38, 52, 0.46);
   }
 
   .compose-bubble-meta {
@@ -137,7 +137,7 @@
     font-size: 9px;
     letter-spacing: 0.05em;
     text-transform: lowercase;
-    color: rgba(255, 255, 255, 0.39);
+    color: rgba(211, 226, 238, 0.68);
   }
 
   .compose-bubble-meta-right {
@@ -147,9 +147,9 @@
   }
 
   .compose-bubble-meta small {
-    font-size: 8px;
+    font-size: 8.5px;
     letter-spacing: 0.05em;
-    color: rgba(255, 255, 255, 0.3);
+    color: rgba(203, 220, 234, 0.6);
   }
 
   .compose-cross-session-badge {
@@ -158,7 +158,7 @@
     color: rgba(242, 225, 192, 0.85);
     border-radius: 999px;
     padding: 1px 6px;
-    font-size: 7px;
+    font-size: 8px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     line-height: 1.4;
@@ -170,13 +170,13 @@
     font-size: 12.5px;
     line-height: 1.62;
     letter-spacing: 0.01em;
-    color: rgba(195, 205, 215, 0.88);
+    color: rgba(217, 228, 238, 0.95);
     white-space: pre-wrap;
     word-break: break-word;
   }
 
   .compose-bubble.user p {
-    color: rgba(195, 230, 220, 0.92);
+    color: rgba(213, 244, 235, 0.96);
   }
 
   .compose-pending {
@@ -208,17 +208,22 @@
     .compose-thread {
       max-height: none;
       min-height: 0;
-      padding: 12px 0;
-      gap: 12px;
+      padding: 13px 8px;
+      gap: 13px;
     }
 
     .compose-bubble {
-      max-width: 90%;
-      padding: 7px 11px;
+      max-width: 94%;
+      padding: 9px 12px;
     }
 
     .compose-bubble p {
-      font-size: 12px;
+      font-size: 12.5px;
+      line-height: 1.58;
+    }
+
+    .compose-bubble-meta {
+      font-size: 9.5px;
     }
   }
 </style>

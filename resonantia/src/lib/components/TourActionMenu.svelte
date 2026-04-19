@@ -36,20 +36,22 @@
 <style>
   .nav-btn {
     font-family: 'Departure Mono', monospace;
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.08em;
-    color: rgba(255, 255, 255, 0.3);
-    background: transparent;
-    border: 0.5px solid rgba(255, 255, 255, 0.08);
+    color: rgba(221, 232, 240, 0.76);
+    background: rgba(18, 24, 34, 0.5);
+    border: 0.5px solid rgba(175, 199, 214, 0.28);
     border-radius: 4px;
-    padding: 4px 10px;
+    min-height: 34px;
+    padding: 6px 12px;
     cursor: pointer;
-    transition: color 0.2s, border-color 0.2s;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
   }
 
   .nav-btn:hover {
-    color: rgba(255, 255, 255, 0.75);
-    border-color: rgba(255, 255, 255, 0.2);
+    color: rgba(240, 246, 250, 0.98);
+    border-color: rgba(196, 220, 236, 0.48);
+    background: rgba(43, 58, 76, 0.58);
   }
 
   .menu-wrap {
@@ -57,29 +59,30 @@
   }
 
   .menu-btn {
-    min-width: 36px;
-    padding: 4px 0;
+    min-width: 42px;
+    padding: 6px 0;
     text-align: center;
-    font-size: 13px;
+    font-size: 16px;
     line-height: 1;
   }
 
   .menu-btn.open {
-    color: rgba(255, 255, 255, 0.72);
-    border-color: rgba(255, 255, 255, 0.22);
+    color: rgba(242, 248, 251, 0.98);
+    border-color: rgba(201, 223, 238, 0.56);
+    background: rgba(56, 73, 92, 0.62);
   }
 
   .menu-popover {
     position: absolute;
     top: calc(100% + 8px);
     right: 0;
-    width: 148px;
-    padding: 6px;
+    width: 178px;
+    padding: 8px;
     display: flex;
     flex-direction: column;
     gap: 4px;
-    background: rgba(10, 11, 14, 0.97);
-    border: 0.5px solid rgba(255, 255, 255, 0.1);
+    background: rgba(10, 13, 19, 0.98);
+    border: 0.5px solid rgba(183, 205, 220, 0.24);
     border-radius: 10px;
     backdrop-filter: blur(18px);
     -webkit-backdrop-filter: blur(18px);
@@ -88,26 +91,56 @@
 
   .menu-item {
     font-family: 'Departure Mono', monospace;
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.08em;
     text-align: left;
-    color: rgba(255, 255, 255, 0.58);
+    color: rgba(214, 228, 237, 0.9);
     background: transparent;
     border: 0.5px solid transparent;
     border-radius: 6px;
-    padding: 8px 10px;
+    min-height: 36px;
+    padding: 9px 11px;
     cursor: pointer;
     transition: color 0.2s, border-color 0.2s, background 0.2s;
   }
 
   .menu-item:hover {
-    color: rgba(255, 255, 255, 0.84);
-    border-color: rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.03);
+    color: rgba(241, 247, 251, 0.98);
+    border-color: rgba(179, 205, 223, 0.28);
+    background: rgba(55, 75, 95, 0.38);
+  }
+
+  .nav-btn:focus-visible,
+  .menu-item:focus-visible {
+    outline: 1px solid rgba(188, 221, 244, 0.78);
+    outline-offset: 1px;
   }
 
   .menu-item:disabled {
     cursor: default;
     opacity: 0.5;
+  }
+
+  @media (max-width: 640px) {
+    .nav-btn {
+      min-height: 38px;
+      font-size: 11.5px;
+    }
+
+    .menu-btn {
+      min-width: 44px;
+      font-size: 17px;
+    }
+
+    .menu-popover {
+      width: min(204px, calc(100vw - 24px));
+      top: calc(100% + 10px);
+    }
+
+    .menu-item {
+      min-height: 38px;
+      font-size: 11.5px;
+      padding: 10px 11px;
+    }
   }
 </style>
